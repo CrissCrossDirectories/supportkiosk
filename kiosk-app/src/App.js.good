@@ -1,0 +1,938 @@
+/* eslint-disable no-undef */
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, addDoc, setLogLevel } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+
+// --- Configuration ---
+const FIREBASE_FUNCTIONS_URL = "https://us-central1-supportkiosk-b43dd.cloudfunctions.net";
+const GEMINI_PROXY_URL = `${FIREBASE_FUNCTIONS_URL}/api/geminiProxy`;
+const INCIDENTIQ_PROXY_URL = `${FIREBASE_FUNCTIONS_URL}/api/incidentIqProxy`;
+const VIDEO_UPLOAD_URL = `${FIREBASE_FUNCTIONS_URL}/api/uploadVideo`;
+
+
+// --- Helper Icons & Logo (as SVG/React components) ---
+const MicIcon = ({ className }) => (
+  <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 12c2.21 0 4-1.79 4-4V4c0-2.21-1.79-4-4-4S8 1.79 8 4v4c0 2.21 1.79 4 4 4zm-2-4c0-1.1.9-2 2-2s2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2V8zm10 4h-2c0 3.31-2.69 6-6 6s-6-2.69-6-6H4c0 4.42 3.58 8 8 8v3h2v-3c4.42 0 8-3.58 8-8z"/>
+  </svg>
+);
+const CheckCircleIcon = ({ className }) => (
+  <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+    <path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clipRule="evenodd" />
+  </svg>
+);
+const NTechLogo = () => (
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAReSURBVHhe7ZtNaxNRGMd5s/mD2Gw1qW3TJE00qY2Nthb8A4IWKngQXHqQXAnuRbwIHgS9iODBIy8eBE9eBUEPguBZEHrxIgh6sVhbk7Zp0jZp0jZN22yWvJJMk2wy+8xmQ/flwM7Mzu/87jPzzswuY2xsbGxs/M+g0tJSdDodQohDkVIqlWJbW5sJgGEYAOD7/pBLpdg0TV97BEiSBABgWRZpmr52CRBFEQBgz/P+aQEAwzB+7fE/gGkaAOD7/qDL5fKaR4A8zwMA2LZtqKoqj8sE8DyPwzIBLMvCNE3fegRIkoQsywIAmqbpW48A8jwnnE4nAEBKuVxuEIBt25imaTzOEyBNUzhPA8iyjHEcR57n5HI5LpcLruvCNE3EcZzP+wRIf9u2+b1eD3meE8dxYFlWqVSCIAj4vq+qKvM8J5fL+b1PABAEgao/BwB4ngcAVVX5vr/f+wQIAgCAIAhIkoRpmgBAmqYsy8L3fQDg+/6gy/UuIEmSNE2D53kAwDAMBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkxRj7+w9LPCxsbGxs/L/4D19rB8M6l/iLAAAAAElFTkSuQmCC" alt="N-Tech Logo" className="h-16 w-auto" />
+);
+const DebugIcon = ({ className }) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+        <path fillRule="evenodd" d="M12.96 6.22a.75.75 0 0 1 1.06 0l.15.15a3.75 3.75 0 0 0 5.3 0s.15-.15.15-.15a.75.75 0 1 1 1.06 1.06l-.15.15a5.25 5.25 0 0 1-7.42 0l-.15-.15a.75.75 0 0 1 0-1.06ZM11.04 6.22a.75.75 0 0 0-1.06 0l-.15.15a3.75 3.75 0 0 1-5.3 0s-.15-.15-.15-.15a.75.75 0 1 0-1.06 1.06l.15.15a5.25 5.25 0 0 0 7.42 0l.15-.15a.75.75 0 0 0 0-1.06ZM4.5 12.75a.75.75 0 0 0 0 1.5h15a.75.75 0 0 0 0-1.5H4.5Z" clipRule="evenodd" />
+        <path d="M3.75 9.75a.75.75 0 0 0 0 1.5h.563c.24 1.583 1.13 2.828 2.388 3.494a.75.75 0 1 0 .698-1.298 2.5 2.5 0 0 1-1.63-2.196h1.03c.24 1.583 1.13 2.828 2.388 3.494a.75.75 0 1 0 .698-1.298 2.5 2.5 0 0 1-1.63-2.196h1.03c.24 1.583 1.13 2.828 2.388 3.494a.75.75 0 1 0 .698-1.298 2.5 2.5 0 0 1-1.63-2.196h1.03c.24 1.583 1.13 2.828 2.388 3.494a.75.75 0 1 0 .698-1.298 2.5 2.5 0 0 1-1.63-2.196H19.5a.75.75 0 0 0 0-1.5H3.75Z" />
+    </svg>
+);
+const ScannerBox = () => (
+    <div className="relative w-64 h-40 sm:w-80 sm:h-36 my-4">
+        <div className="w-full h-full border-2 border-dashed border-cyan-400/50 rounded-lg"></div>
+        <div className="absolute top-0 left-0 w-full h-1 bg-cyan-400 shadow-[0_0_10px_theme(colors.cyan.400)] animate-scan"></div>
+        <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-cyan-400 rounded-tl-lg"></div>
+        <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-cyan-400 rounded-tr-lg"></div>
+        <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-cyan-400 rounded-bl-lg"></div>
+        <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-cyan-400 rounded-br-lg"></div>
+    </div>
+);
+
+// --- Main App Component ---
+export default function App() {
+    // --- State Management ---
+    const [status, setStatus] = useState('awaiting_start');
+    const [visitorName, setVisitorName] = useState('');
+    const [problemDescription, setProblemDescription] = useState('');
+    const [iiqUser, setIiqUser] = useState(null);
+    const [ticketDetails, setTicketDetails] = useState(null);
+    const [isListening, setIsListening] = useState(false);
+    const [interimTranscript, setInterimTranscript] = useState('');
+    const [finalTicket, setFinalTicket] = useState(null);
+    const [errorMessage, setErrorMessage] = useState('');
+    const [potentialUser, setPotentialUser] = useState(null);
+    const [potentialUsers, setPotentialUsers] = useState([]);
+    const [userAssets, setUserAssets] = useState([]);
+    const [identifiedAsset, setIdentifiedAsset] = useState(null);
+    const [conversationHistory, setConversationHistory] = useState([]);
+    const [clarificationCount, setClarificationCount] = useState(0);
+    const [clarificationQuestion, setClarificationQuestion] = useState('');
+    const [showDebug, setShowDebug] = useState(false);
+    const [debugPrompt, setDebugPrompt] = useState('');
+    
+    // --- Firebase State ---
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [appId, setAppId] = useState('default-kiosk-app');
+
+    // --- Refs ---
+    const videoRef = useRef(null);
+    const recognitionRef = useRef(null);
+    const mediaRecorderRef = useRef(null);
+    const recordedChunksRef = useRef([]);
+    const barcodeDetectorRef = useRef(null);
+    const resetSessionTimeoutRef = useRef(null);
+    const scanIntervalRef = useRef(null);
+    const statusRef = useRef(status);
+    const isRecognitionActiveRef = useRef(false);
+    const finalTranscriptRef = useRef('');
+    const processTranscriptRef = useRef();
+    const pauseTimeoutRef = useRef(null); // Ref for the pause buffer timeout
+
+    useEffect(() => {
+        processTranscriptRef.current = processTranscript;
+    });
+
+    useEffect(() => {
+        statusRef.current = status;
+        const buttonDrivenStates = [
+            'awaiting_id_confirmation',
+            'awaiting_barcode_confirmation',
+            'awaiting_confirmation'
+        ];
+        if (buttonDrivenStates.includes(status) && recognitionRef.current && isRecognitionActiveRef.current) {
+            console.log(`Stopping recognition for button-driven state: ${status}.`);
+            recognitionRef.current.stop();
+        }
+    }, [status]);
+
+    // --- Firebase Initialization ---
+    useEffect(() => {
+        const firebaseConfig = {
+            apiKey: "AIzaSyBapH9Dg67yNbs09ZdRiQAkuH7HTu9cbok",
+            authDomain: "supportkiosk-b43dd.firebaseapp.com",
+            projectId: "supportkiosk-b43dd",
+            storageBucket: "supportkiosk-b43dd.firebasestorage.app",
+            messagingSenderId: "315490541997",
+            appId: "1:315490541997:web:21c3aff2b67ea72ab94124",
+            measurementId: "G-VW5L0K252N"
+        };
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            const firestoreDb = getFirestore(app);
+            const firebaseAuth = getAuth(app);
+            setDb(firestoreDb);
+            setAuth(firebaseAuth);
+            setAppId(firebaseConfig.appId);
+            setLogLevel('debug');
+
+            onAuthStateChanged(firebaseAuth, user => {
+                if (!user) {
+                    signInAnonymously(firebaseAuth);
+                }
+            });
+        } catch (e) {
+            console.error("Firebase init error:", e);
+            setStatus('error');
+            setErrorMessage('System configuration error.');
+        }
+    }, []);
+
+    // --- Main Session Reset Logic ---
+    const resetSession = () => {
+        setVisitorName('');
+        setProblemDescription('');
+        setIdentifiedAsset(null);
+        setIiqUser(null);
+        setTicketDetails(null);
+        setInterimTranscript('');
+        setFinalTicket(null);
+        setErrorMessage('');
+        setPotentialUser(null);
+        setPotentialUsers([]);
+        setUserAssets([]);
+        setConversationHistory([]);
+        setClarificationCount(0);
+        setClarificationQuestion('');
+        setStatus('awaiting_start');
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+        }
+        if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+    };
+
+    // --- Handle "Try Again" from multi-user selection ---
+    const handleTryAgain = () => {
+        setPotentialUser(null);
+        setPotentialUsers([]);
+        setStatus('awaiting_name');
+        setupSpeechRecognition();
+    };
+
+    // --- Handle restarting the problem description ---
+    const handleRedoProblem = () => {
+        setProblemDescription('');
+        setTicketDetails(null);
+        setConversationHistory([]);
+        setClarificationCount(0);
+        setClarificationQuestion('');
+        setStatus('awaiting_problem');
+        setupSpeechRecognition();
+    };
+
+    // --- Start Camera and Barcode Scanner ---
+    const startBarcodeScanner = () => {
+        if (!barcodeDetectorRef.current) {
+            console.log("Barcode detector not ready, cannot start scanner.");
+            return;
+        }
+        if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+        scanIntervalRef.current = setInterval(async () => {
+            if (videoRef.current?.readyState >= 4 && (statusRef.current === 'awaiting_scan' || statusRef.current === 'awaiting_name')) {
+                try {
+                    const barcodes = await barcodeDetectorRef.current.detect(videoRef.current);
+                    if (barcodes.length > 0) {
+                        const scannedId = barcodes[0].rawValue;
+                        if(scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+                        verifyUserByBarcode(scannedId);
+                    }
+                } catch (e) { console.error("Error during barcode detection:", e); if(scanIntervalRef.current) clearInterval(scanIntervalRef.current); }
+            }
+        }, 1000);
+    }
+
+    // --- Setup and Start Speech Recognition ---
+    const setupSpeechRecognition = () => {
+        if (recognitionRef.current) {
+            return;
+        }
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            setStatus('error');
+            setErrorMessage('Speech recognition not supported.');
+            return;
+        }
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        recognition.onstart = () => {
+            isRecognitionActiveRef.current = true;
+            setIsListening(true);
+        };
+        recognition.onend = () => {
+            isRecognitionActiveRef.current = false;
+            setIsListening(false);
+            console.log("Recognition ended for status:", statusRef.current);
+            if (finalTranscriptRef.current) {
+                processTranscriptRef.current(finalTranscriptRef.current.trim());
+                finalTranscriptRef.current = ''; // Clear after processing
+            }
+        };
+        recognition.onerror = (event) => {
+            isRecognitionActiveRef.current = false;
+            setIsListening(false);
+            if (event.error === 'not-allowed') {
+                setErrorMessage("Microphone access was denied. Please enable it in your browser settings and tap the screen to restart.");
+                setStatus('error');
+                return;
+            }
+            if (event.error === 'no-speech' || event.error === 'aborted') {
+                console.log("No speech detected or recognition aborted.");
+                return;
+            }
+            console.error("Critical speech recognition error:", event.error, event.message);
+            setErrorMessage(`Speech recognition error: ${event.error}.`);
+        };
+        recognition.onresult = (event) => {
+            let final = '';
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    final += event.results[i][0].transcript;
+                } else {
+                    interim += event.results[i][0].transcript;
+                }
+            }
+            setInterimTranscript(interim);
+            if (final) {
+                finalTranscriptRef.current += final + ' ';
+            }
+        };
+        recognitionRef.current = recognition;
+    };
+
+    // --- AI-Powered Problem Clarification and Summarization ---
+    const getProblemSolvingResponse = async (history, asset, count, userName) => {
+        const assetInfo = asset ? `The user is having a problem with their ${asset.Name} (Model: ${asset.Model?.Name || 'N/A'}).` : "The user has not specified a device.";
+        const prompt = `You are an expert IT support technician helping a user named ${userName}. Your goal is to gather information to create a useful support ticket. **CONTEXT:** - User: ${userName} - Device: ${assetInfo} - Conversation History:   ${history.map(h => `${h.role === 'user' ? userName : 'Assistant'}: ${h.parts[0].text}`).join('\n')} - Questions Asked So Far: ${count} **YOUR TASK (Follow these steps in order):** 1.  **Analyze Completeness:** Review the entire conversation history. Do you have a specific, actionable problem description? "It's broken" is not enough. "The screen is cracked" is enough. 2.  **Decision:** - **IF** the information is complete **OR** if you have already asked 2 questions (the "Questions Asked So Far" is 2), you MUST proceed to Step 4 (Summarize).     - **ELSE** (the information is vague and you have asked fewer than 2 questions), proceed to Step 3 (Ask). 3.  **Ask:** Formulate ONE clarifying question. Do not repeat previous questions. The goal is to get a more specific detail. 4.  **Summarize:** Write a concise, one-paragraph summary of the issue based on ALL information gathered. **RESPONSE FORMAT:** You MUST respond with a valid JSON object. - If you decided to ask a question in Step 3, use this format:   \`{"status": "needs_clarification", "content": "Your question here."}\` - If you decided to summarize in Step 4, use this format:   \`{"status": "complete", "content": "Your summary paragraph here."}\``;
+        setDebugPrompt(prompt);
+        const payload = {
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: {
+                responseMimeType: "application/json",
+            }
+        };
+        try {
+            const result = await callProxy(GEMINI_PROXY_URL, { body: payload });
+            const jsonText = result.candidates[0].content.parts[0].text;
+            return JSON.parse(jsonText);
+        } catch (error) {
+            console.error("Clarification/Summarization AI error:", error);
+            const lastUserMessage = history.filter(h => h.role === 'user').pop()?.parts[0]?.text || "Problem description could not be processed.";
+            return { status: 'complete', content: lastUserMessage };
+        }
+    }
+
+    const handleClarificationResponse = (result, history) => {
+        if (result.status === 'needs_clarification') {
+            setClarificationQuestion(result.content);
+            setConversationHistory([...history, { role: 'model', parts: [{ text: result.content }] }]);
+            setStatus('awaiting_clarification');
+        } else { // status is 'complete'
+            setProblemDescription(result.content);
+        }
+    };
+
+    const startClarificationProcess = async (initialProblem) => {
+        setStatus('processing');
+        const initialHistory = [{ role: 'user', parts: [{ text: initialProblem }] }];
+        setConversationHistory(initialHistory);
+        setClarificationCount(0);
+        const result = await getProblemSolvingResponse(initialHistory, identifiedAsset, 0, visitorName);
+        handleClarificationResponse(result, initialHistory);
+    };
+
+    // --- Process Transcript ---
+    const processTranscript = async (transcript) => {
+        if (!transcript) return;
+        const cancelWords = ['cancel', 'start over', 'delete', 'never mind','end'];
+        if (cancelWords.some(word => transcript.toLowerCase().includes(word))) {
+            resetSession();
+            return;
+        }
+        const currentStatus = statusRef.current;
+        if (currentStatus === 'awaiting_scan' || currentStatus === 'awaiting_name') {
+            verifyUserByName(transcript);
+            return;
+        }
+        if (currentStatus === 'awaiting_problem') {
+            startClarificationProcess(transcript);
+            return;
+        }
+        if (currentStatus === 'awaiting_clarification') {
+            const newCount = clarificationCount + 1;
+            setClarificationCount(newCount);
+            const updatedHistory = [...conversationHistory, { role: 'user', parts: [{ text: transcript }] }];
+            setConversationHistory(updatedHistory);
+            const result = await getProblemSolvingResponse(updatedHistory, identifiedAsset, newCount, visitorName);
+            handleClarificationResponse(result, updatedHistory);
+            return;
+        }
+    };
+
+    // --- Verify User by Barcode ---
+    const verifyUserByBarcode = async (searchTerm) => {
+        setStatus('verifying');
+        const users = await findUserInIncidentIQ(searchTerm);
+        if (users && users.length > 0) {
+            setErrorMessage('');
+            if (users.length === 1) {
+                setPotentialUser(users[0]);
+                setStatus('awaiting_barcode_confirmation');
+            } else {
+                setPotentialUsers(users);
+                setStatus('awaiting_selection');
+            }
+        } else {
+            setPotentialUser(null);
+            setErrorMessage("I couldn't verify that ID. Please try again or tap the screen to enter your name.");
+            setStatus('awaiting_name');
+            setupSpeechRecognition();
+        }
+    };
+
+    // --- Verify User by Spoken Name ---
+    const verifyUserByName = async (name) => {
+        setStatus('verifying');
+        const users = await findUserInIncidentIQ(name);
+        if (users && users.length > 0) {
+            setErrorMessage('');
+            if (users.length > 1) {
+                setPotentialUsers(users);
+                setStatus('awaiting_selection');
+            } else {
+                setPotentialUser(users[0]);
+                setStatus('awaiting_id_confirmation');
+            }
+        } else {
+            setPotentialUser(null);
+            setErrorMessage(`I couldn't find anyone named "${name}". Please try spelling it out.`);
+            setStatus('awaiting_name');
+        }
+    };
+
+    // --- Handle User Selection from a list ---
+    const handleUserSelection = async (user) => {
+        if (!user) {
+            console.error("handleUserSelection called with null user.");
+            resetSession();
+            return;
+        }
+        const assets = await getUserAssets(user.UserId);
+        const userWithAssets = { ...user, Assets: assets || [] };
+        const firstName = toProperCase(userWithAssets.Name.split(' ')[0]);
+        setIiqUser(userWithAssets);
+        setVisitorName(firstName);
+        setPotentialUsers([]);
+        setPotentialUser(null);
+        if (assets && assets.length > 0) {
+            setUserAssets(assets);
+            setStatus('awaiting_asset_selection');
+        } else {
+            setStatus('awaiting_problem');
+            setupSpeechRecognition();
+        }
+    };
+
+    const handleConfirmation = async (isConfirmed) => {
+        if (isConfirmed) {
+            await handleUserSelection(potentialUser);
+        } else {
+            setPotentialUser(null);
+            setErrorMessage("My mistake. Let's try again.");
+            setStatus('awaiting_name');
+            setupSpeechRecognition();
+        }
+    };
+
+    // --- Handle Asset Selection ---
+    const handleAssetSelection = (asset) => {
+        setIdentifiedAsset(asset);
+        setStatus('awaiting_problem');
+        setupSpeechRecognition();
+    };
+
+    // --- Helper function for proper casing ---
+    const toProperCase = (str) => {
+        if (!str) return '';
+        return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+    };
+
+    // --- Prepare ticket details for confirmation ---
+    const prepareTicket = (user, selectedAsset, finalProblemDescription) => {
+        setStatus('processing');
+        if (!user) {
+            setErrorMessage("User information was lost. Please restart the process.");
+            setStatus('error');
+            return;
+        }
+        
+        const deviceName = selectedAsset ? ` - ${selectedAsset.Name}` : '';
+        const details = {
+            Subject: `Walk Up - ${user.Location?.Name || 'Unknown Location'}${deviceName}`,
+            IssueDescription: finalProblemDescription,
+            ForId: user.UserId,
+            LocationId: user.LocationId,
+            Assets: selectedAsset ? [{ AssetId: selectedAsset.AssetId }] : [],
+            Tags: [{ Name: "Walk Up" }],
+        };
+        setTicketDetails(details);
+        setStatus('awaiting_confirmation');
+    };
+
+    useEffect(() => {
+        if (problemDescription && iiqUser && !ticketDetails) {
+            prepareTicket(iiqUser, identifiedAsset, problemDescription);
+        }
+    }, [iiqUser, problemDescription, identifiedAsset, ticketDetails]);
+
+    // --- Create Ticket after Confirmation ---
+    const createTicket = async () => {
+        if (!ticketDetails || !iiqUser) return;
+        setStatus('processing');
+        try {
+            const newTicket = await createIncidentIQTicket(ticketDetails);
+            if (!newTicket.success) {
+                setErrorMessage(newTicket.errorMessage || "Failed to create ticket in Incident IQ.");
+                setStatus('error');
+                setTimeout(resetSession, 10000);
+                return;
+            }
+
+            const videoLink = await stopRecording(newTicket.ticketNumber);
+            
+            const finalTicketDetails = {
+                ...ticketDetails,
+                TicketId: newTicket.ticketId,
+                IssueDescription: `${ticketDetails.IssueDescription}\n\nVideo Submission: ${videoLink || 'Not available.'}`
+            };
+
+            await updateIncidentIQTicket(finalTicketDetails);
+            await logTicketToFirestore({ ...finalTicketDetails, ticketNumber: newTicket.ticketNumber });
+            setFinalTicket(newTicket);
+            setStatus('confirming');
+            if (resetSessionTimeoutRef.current) clearTimeout(resetSessionTimeoutRef.current);
+            resetSessionTimeoutRef.current = setTimeout(resetSession, 10000);
+
+        } catch (error) {
+            console.error("A critical error occurred during the ticket process.", error)
+            setErrorMessage("A critical error occurred. Please try again.");
+            setStatus('error');
+            setTimeout(resetSession, 10000);
+        }
+    };
+    
+    // --- Video Recording Functions ---
+    const startRecording = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+            recordedChunksRef.current = [];
+            mediaRecorderRef.current.start();
+            // Immediately pause after starting
+            mediaRecorderRef.current.pause();
+        }
+    };
+
+    const stopRecording = (ticketNumber) => {
+        return new Promise(async (resolve) => {
+            if (mediaRecorderRef.current && (mediaRecorderRef.current.state === 'recording' || mediaRecorderRef.current.state === 'paused')) {
+                mediaRecorderRef.current.onstop = async () => {
+                    const videoBlob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+                    
+                    const date = new Date().toISOString().split('T')[0];
+                    const location = iiqUser.Location?.Name.replace(/ /g, '-') || 'Unknown-Location';
+                    const userId = iiqUser.UserId || 'Unknown-User';
+                    const fileName = `${date}_${location}_${userId}.webm`;
+
+                    const metadata = {
+                        userName: iiqUser.Name,
+                        userId: iiqUser.UserId,
+                        userLocation: iiqUser.Location?.Name,
+                        ticketNumber: ticketNumber,
+                    };
+
+                    const videoLink = await uploadToGoogleDrive(videoBlob, fileName, metadata);
+                    recordedChunksRef.current = [];
+                    resolve(videoLink);
+                };
+                mediaRecorderRef.current.stop();
+            } else {
+                resolve(null);
+            }
+        });
+    };
+
+    // --- API & DB Functions ---
+    async function callProxy(url, body) {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Proxy call to ${url} failed with status ${response.status}:`, errorText);
+            throw new Error(`API Error: ${response.status}`);
+        }
+        return response.json();
+    }
+
+    async function getUserAssets(UserId) {
+        if (!UserId) return null;
+        try {
+            const data = await callProxy(INCIDENTIQ_PROXY_URL, {
+                path: '/api/v1.0/assets',
+                method: 'POST',
+                body: { "Filters": [{ "Facet": "User", "Id": UserId }] }
+            });
+            return data.Items || [];
+        } catch (error) {
+            console.error("Error fetching user assets from Incident IQ:", error);
+            setErrorMessage("Could not retrieve device list.");
+            return null;
+        }
+    }
+
+    async function findUserInIncidentIQ(searchTerm) {
+        try {
+            const data = await callProxy(INCIDENTIQ_PROXY_URL, {
+                path: `/api/v1.0/users/${searchTerm}`,
+                method: 'GET'
+            });
+            return [data];
+        } catch (error) {
+            console.warn(`Direct lookup for ${searchTerm} failed. Falling back to search.`);
+            return findUserByName(searchTerm);
+        }
+    }
+
+    async function findUserByName(name) {
+        try {
+            const data = await callProxy(INCIDENTIQ_PROXY_URL, {
+                path: `/services/users?$filter=(SearchText contains '${name}')`,
+                method: 'GET'
+            });
+            return data.Items || [];
+        } catch (error) {
+            console.error("Error fetching user from Incident IQ:", error);
+            return [];
+        }
+    }
+
+    async function createIncidentIQTicket(ticketData) {
+        try {
+            const responseData = await callProxy(INCIDENTIQ_PROXY_URL, {
+                path: '/api/v1.0/tickets/new',
+                method: 'POST',
+                body: ticketData
+            });
+            return {
+                success: true,
+                ticketId: responseData.Item.Id,
+                ticketNumber: responseData.Item.TicketNumber,
+                title: responseData.Item.Subject,
+                visitorName: responseData.Item.For.Name,
+            };
+        } catch (error) {
+            console.error("Error in createIncidentIQTicket:", error);
+            return { success: false, errorMessage: error.message };
+        }
+    }
+
+    async function updateIncidentIQTicket(ticketData) {
+        try {
+            await callProxy(INCIDENTIQ_PROXY_URL, {
+                path: `/api/v1.0/tickets/${ticketData.TicketId}`,
+                method: 'POST',
+                body: ticketData
+            });
+            return { success: true };
+        } catch (error) {
+            console.error("Error in updateIncidentIQTicket:", error);
+            return { success: false, errorMessage: error.message };
+        }
+    }
+
+    async function logTicketToFirestore(ticket) {
+        if (!db) return;
+        try {
+            const docRef = collection(db, `artifacts/${appId}/public/data/tickets`);
+            await addDoc(docRef, { ...ticket, timestamp: new Date().toISOString() });
+        } catch (e) { console.error("Firestore log error: ", e); }
+    }
+
+    const blobToBase64 = (blob) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = () => {
+                resolve(reader.result.split(',')[1]);
+            };
+            reader.onerror = (error) => {
+                reject(error);
+            };
+        });
+    };
+
+    async function uploadToGoogleDrive(videoBlob, fileName, metadata) {
+        try {
+            const base64Data = await blobToBase64(videoBlob);
+            const response = await fetch(VIDEO_UPLOAD_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    fileName: fileName,
+                    fileData: base64Data,
+                    metadata: metadata,
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Upload failed with status ${response.status}`);
+            }
+
+            const result = await response.json();
+            return result.link;
+
+        } catch (error) {
+            console.error("Failed to upload video to Google Drive:", error);
+            return `Upload failed: ${error.message}`;
+        }
+    }
+
+    // --- Main screen tap handler ---
+    const handleScreenTap = async () => {
+        if (status === 'awaiting_start') {
+            setStatus('initializing');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                     video: true,
+                     audio: {
+                         noiseSuppression: true,
+                         echoCancellation: true
+                     }
+                 });
+                if ('BarcodeDetector' in window) {
+                    barcodeDetectorRef.current = new window.BarcodeDetector({ formats: ['code_128', 'qr_code', 'ean_13'] });
+                } else {
+                    console.warn("BarcodeDetector API not supported.");
+                }
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    videoRef.current.oncanplay = () => videoRef.current.play();
+                }
+                mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'video/webm' });
+                mediaRecorderRef.current.ondataavailable = (event) => {
+                    if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+                };
+                // Start and immediately pause the recording.
+                startRecording();
+                setStatus('awaiting_scan');
+                startBarcodeScanner();
+                setupSpeechRecognition();
+            } catch (err) {
+                console.error("Error accessing media devices:", err.name, err.message);
+                if (err.name === 'NotFoundError') {
+                    console.warn("Camera/Mic not found. Degrading to voice-only mode.");
+                    setErrorMessage("Camera not found. Switching to voice input.");
+                    setStatus('awaiting_name');
+                    setupSpeechRecognition();
+                } else {
+                    setStatus('error');
+                    let msg = `Could not access Camera/Mic (${err.name}). Please tap to restart.`;
+                    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                        msg = 'Camera/Mic access denied. Please enable permissions in your browser settings and tap to restart.';
+                    } else if (err.name === 'NotReadableError') {
+                        msg = 'Your camera or microphone is currently in use by another application. Please close it and try again.';
+                    }
+                    setErrorMessage(msg);
+                }
+            }
+        }
+    };
+
+    return (
+        <div className="w-screen h-screen bg-gray-800 relative flex flex-col overflow-hidden">
+            <style>
+                {`
+                @keyframes scan {
+                    0% { top: 0; }
+                    100% { top: calc(100% - 4px); }
+                }
+                .animate-scan {
+                    animation: scan 2s linear infinite alternate;
+                }
+                `}
+            </style>
+            {status !== 'awaiting_start' && (
+                <>
+                    <video ref={videoRef} playsInline muted className="absolute top-0 left-0 w-full h-full object-cover transform scale-x-[-1]"></video>
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent"></div>
+                    <header className="relative z-10 w-full p-8 flex items-center gap-4 bg-black/60 backdrop-blur-sm shadow-lg">
+                        <NTechLogo />
+                        <div>
+                            <h1 className="text-4xl font-bold text-shadow text-white">Tech Support Kiosk</h1>
+                            <p className="text-xl text-shadow-sm text-cyan-300">Live Assistant Mode</p>
+                        </div>
+                    </header>
+                </>
+            )}
+            <main className="relative z-10 w-full flex-grow flex flex-col items-center justify-center pb-8 px-8 gap-8">
+                {status === 'awaiting_start' ? (
+                    <div className="text-center cursor-pointer w-full h-full flex flex-col justify-center items-center" onClick={handleScreenTap}>
+                        <NTechLogo />
+                        <h1 className="text-4xl font-bold text-white mt-4">Tap to Begin</h1>
+                    </div>
+                ) : status === 'confirming' && finalTicket ? (
+                    <ConfirmationDisplay ticket={finalTicket} />
+                ) : (
+                    <LiveStatusDisplay
+                        status={status}
+                        interimTranscript={interimTranscript}
+                        visitorName={visitorName}
+                        iiqUser={iiqUser}
+                        problemDescription={problemDescription}
+                        isListening={isListening}
+                        errorMessage={errorMessage}
+                        potentialUser={potentialUser}
+                        potentialUsers={potentialUsers}
+                        clarificationQuestion={clarificationQuestion}
+                        onSelectUser={handleUserSelection}
+                        onTryAgain={handleTryAgain}
+                        userAssets={userAssets}
+                        onAssetSelect={handleAssetSelection}
+                        onCreateTicket={createTicket}
+                        onRedoProblem={handleRedoProblem}
+                        onConfirmUser={handleConfirmation}
+                        ticketDetails={ticketDetails}
+                        identifiedAsset={identifiedAsset}
+                        onListenStart={() => {
+                            finalTranscriptRef.current = '';
+                            if (pauseTimeoutRef.current) clearTimeout(pauseTimeoutRef.current);
+                            if (mediaRecorderRef.current?.state === 'paused') mediaRecorderRef.current.resume();
+                            setupSpeechRecognition();
+                            if (recognitionRef.current && !isRecognitionActiveRef.current) {
+                                recognitionRef.current.start();
+                            }
+                        }}
+                        onListenStop={() => {
+                            if (recognitionRef.current && isRecognitionActiveRef.current) {
+                                recognitionRef.current.stop();
+                            }
+                            // Pause with a buffer
+                            pauseTimeoutRef.current = setTimeout(() => {
+                                if (mediaRecorderRef.current?.state === 'recording') {
+                                    mediaRecorderRef.current.pause();
+                                }
+                            }, 1000); // 1-second buffer
+                        }}
+                    />
+                )}
+            </main>
+            <footer className="relative z-10 w-full h-16 px-8 flex justify-end items-center">
+                <button onClick={() => setShowDebug(prev => !prev)} className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors">
+                    <DebugIcon className="w-6 h-6 text-white" />
+                </button>
+            </footer>
+            {showDebug && <DebugWindow prompt={debugPrompt} onClose={() => setShowDebug(false)} />}
+        </div>
+    );
+}
+
+// --- UI Display Components ---
+const LiveStatusDisplay = ({ status, interimTranscript, visitorName, iiqUser, problemDescription, identifiedAsset, isListening, errorMessage, potentialUser, potentialUsers, clarificationQuestion, onSelectUser, onTryAgain, userAssets, onAssetSelect, onCreateTicket, onRedoProblem, onConfirmUser, onListenStart, onListenStop, ticketDetails }) => {
+    let message = "";
+    if (status === 'initializing') message = "Initializing systems...";
+    if (status === 'awaiting_scan') message = "Please scan your ID badge, or hold the button below to say your name or ID#.";
+    if (status === 'awaiting_name') message = "I couldn't locate your record. Please hold the button and say your name or ID# again.";
+    if (status === 'awaiting_selection') message = "I found a few people. Please tap your name to continue.";
+    if (status === 'awaiting_asset_selection') message = "Great. Which device are you having an issue with?";
+    if (status === 'awaiting_id_confirmation' && potentialUser) message = `Thanks, ${potentialUser.Name}. Is that correct?`;
+    if (status === 'awaiting_barcode_confirmation' && potentialUser) message = `I see you're ${potentialUser.Name}. Is that correct?`;
+    if (status === 'processing') message = "One moment...";
+    if (status === 'verifying') message = "Verifying user...";
+    if (status === 'awaiting_problem') message = `Thanks, ${visitorName}. Please hold the button and describe your issue.`;
+    if (status === 'awaiting_clarification') message = clarificationQuestion || "Let me ask a quick follow-up...";
+    if (status === 'awaiting_confirmation') message = `Please review the details, ${visitorName}. Is this correct?`;
+    if (status === 'error') message = errorMessage || "There was a problem.";
+
+    const nameDisplay = iiqUser ? <><span className="text-cyan-300">{visitorName}</span> <span className="text-sm text-green-400">(Verified)</span></> : <span className="text-yellow-300">{visitorName || '...'}</span>;
+    const showTicketDetails = status === 'awaiting_confirmation';
+    const showUserConfirmationButtons = status === 'awaiting_id_confirmation' || status === 'awaiting_barcode_confirmation';
+    const showListenButton = ['awaiting_scan', 'awaiting_name', 'awaiting_problem', 'awaiting_clarification'].includes(status);
+    const showScannerBox = status === 'awaiting_scan';
+
+    return (
+        <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl max-w-3xl w-full shadow-2xl border border-gray-500 flex flex-col items-center">
+            <h2 className="text-3xl font-semibold text-cyan-400 mb-4 text-center">{message}</h2>
+            {status === 'processing' && <div className="my-4"><LoadingSpinner /></div>}
+            {showScannerBox && <ScannerBox />}
+            {showListenButton && (
+                <div className="mt-4 flex flex-col items-center">
+                    <button
+                         onMouseDown={onListenStart}
+                        onMouseUp={onListenStop}
+                        onTouchStart={onListenStart}
+                        onTouchEnd={onListenStop}
+                        className={`px-8 py-4 rounded-full transition-all duration-200 flex items-center gap-3 ${isListening ? 'bg-red-600 animate-pulse' : 'bg-cyan-600 hover:bg-cyan-500'}`}
+                    >
+                        <MicIcon className="w-8 h-8 text-white" />
+                        <span className="text-white font-bold text-2xl">{isListening ? 'Listening...' : 'Hold to Speak'}</span>
+                    </button>
+                    <p className="text-2xl italic text-gray-300 mt-4 min-h-[32px]">"{interimTranscript}"</p>
+                </div>
+            )}
+            {errorMessage && status !== 'error' && <p className="text-yellow-300 text-center my-4">{errorMessage}</p>}
+            {status === 'awaiting_selection' && (
+                <>
+                    <div className="max-h-64 overflow-y-auto grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 p-2">
+                        {potentialUsers.map(user => (
+                            <button
+                                 key={user.UserId}
+                                 onClick={() => onSelectUser(user)}
+                                className="bg-cyan-600/50 hover:bg-cyan-500/80 text-white font-bold py-2 px-3 rounded-lg transition-all duration-200 text-left"
+                            >
+                                <p className="text-base">{user.Name}</p>
+                                <p className="text-xs text-cyan-200">ID: {user.SchoolIdNumber || 'N/A'}</p>
+                            </button>
+                        ))}
+                    </div>
+                    <div className="mt-4 text-center">
+                        <button onClick={onTryAgain} className="bg-red-600/80 hover:bg-red-500/80 text-white font-bold py-2 px-4 rounded-lg transition-all duration-200">
+                            I'm not here. Let's try again.
+                        </button>
+                    </div>
+                </>
+            )}
+            {showUserConfirmationButtons && (
+                 <div className="flex justify-center gap-4 pt-4">
+                    <button onClick={() => onConfirmUser(true)} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg transition-all duration-200">Yes, that's me</button>
+                    <button onClick={() => onConfirmUser(false)} className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-lg transition-all duration-200">No, that's not me</button>
+                </div>
+            )}
+            {status === 'awaiting_asset_selection' && (
+                 <>
+                    <div className="max-h-64 overflow-y-auto grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 p-2">
+                        {userAssets.map(asset => (
+                            <button
+                                 key={asset.AssetId}
+                                 onClick={() => onAssetSelect(asset)}
+                                className="bg-cyan-600/50 hover:bg-cyan-500/80 text-white font-bold py-3 px-4 rounded-lg transition-all duration-200 text-left"
+                            >
+                                <p className="text-base">{asset.Name}</p>
+                                <p className="text-xs text-cyan-200">Tag: {asset.AssetTag || 'N/A'}</p>
+                            </button>
+                        ))}
+                         <button
+                             onClick={() => onAssetSelect(null)}
+                            className="bg-gray-600/50 hover:bg-gray-500/80 text-white font-bold py-3 px-4 rounded-lg transition-all duration-200 text-left"
+                        >
+                            <p className="text-base">It's something else</p>
+                        </button>
+                    </div>
+                 </>
+            )}
+            {showTicketDetails &&
+                 <div className="text-left space-y-3 text-xl mt-4">
+                    <p><strong className="text-cyan-400">Name:</strong> {nameDisplay}</p>
+                    <p><strong className="text-cyan-400">Problem:</strong> <span className="text-white">{problemDescription || '...'}</span></p>
+                    {identifiedAsset && <p><strong className="text-cyan-400">Device:</strong> <span className="text-purple-300">{identifiedAsset.Name} ({identifiedAsset.Model?.Name})</span></p>}
+                    <div className="flex justify-center gap-4 pt-4">
+                        <button onClick={onCreateTicket} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg transition-all duration-200">Yes, Create Ticket</button>
+                        <button onClick={onRedoProblem} className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-lg transition-all duration-200">No, Let's Try Again</button>
+                    </div>
+                </div>
+            }
+        </div>
+    );
+};
+
+const ConfirmationDisplay = ({ ticket }) => (
+    <div className="bg-teal-900/80 backdrop-blur-md p-8 rounded-2xl max-w-3xl w-full shadow-2xl border-2 border-cyan-500">
+        <CheckCircleIcon className="w-20 h-20 mx-auto text-cyan-400" />
+        <h2 className="text-4xl font-bold mt-4">Ticket Created!</h2>
+        <p className="text-lg mt-2">A technician will be with you shortly. This screen will reset automatically.</p>
+        <div className="mt-6 bg-black/40 p-4 rounded-lg text-left text-xl space-y-2">
+            <p><strong>Ticket #:</strong> <span className="font-mono">{ticket.ticketNumber}</span></p>
+            <p><strong>Title:</strong> {ticket.title}</p>
+            <p><strong>Visitor:</strong> {ticket.visitorName}</p>
+        </div>
+    </div>
+);
+
+const DebugWindow = ({ prompt, onClose }) => (
+    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="bg-gray-900 text-white rounded-lg shadow-2xl max-w-4xl w-full max-h-full flex flex-col">
+            <header className="p-4 border-b border-gray-700 flex justify-between items-center">
+                <h3 className="text-lg font-semibold">AI Debug Prompt</h3>
+                <button onClick={onClose} className="text-gray-400 hover:text-white">×</button>
+            </header>
+            <pre className="p-4 overflow-auto text-sm whitespace-pre-wrap">
+                {prompt}
+            </pre>
+        </div>
+    </div>
+);
+
+// A simple loading spinner component
+const LoadingSpinner = () => (
+    <svg className="animate-spin h-10 w-10 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+    </svg>
+);

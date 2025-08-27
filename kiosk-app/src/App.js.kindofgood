@@ -1,0 +1,628 @@
+// --- Version: Phase 2, Rev 9 (Complete Kiosk Flows) ---
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, onSnapshot, getDoc, setDoc, query, where, getDocs, updateDoc, writeBatch, arrayUnion, arrayRemove, addDoc } from 'firebase/firestore';
+
+// --- Configuration ---
+const firebaseConfig = {
+    apiKey: "AIzaSyBapH9Dg67yNbs09ZdRiQAkuH7HTu9cbok",
+    authDomain: "supportkiosk-b43dd.firebaseapp.com",
+    projectId: "supportkiosk-b43dd",
+    storageBucket: "supportkiosk-b43dd.firebasestorage.app",
+    messagingSenderId: "315490541997",
+    appId: "1:315490541997:web:21c3aff2b67ea72ab94124"
+};
+const FIREBASE_FUNCTIONS_URL = "https://us-central1-supportkiosk-b43dd.cloudfunctions.net";
+const GEMINI_PROXY_URL = `${FIREBASE_FUNCTIONS_URL}/api/geminiProxy`;
+const INCIDENTIQ_PROXY_URL = `${FIREBASE_FUNCTIONS_URL}/api/incidentIqProxy`;
+const VIDEO_UPLOAD_URL = `${FIREBASE_FUNCTIONS_URL}/api/uploadVideo`;
+
+
+// --- Helper Icons (as SVG/React components) ---
+const NTechLogo = () => ( <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAReSURBVHhe7ZtNaxNRGMd5s/mD2Gw1qW3TJE00qY2Nthb8A4IWKngQXHqQXAnuRbwIHgS9iODBIy8eBE9eBUEPguBZEHrxIgh6sVhbk7Zp0jZp0jZN22yWvJJMk2wy+8xmQ/flwM7Mzu/87jPzzswuY2xsbGxs/M+g0tJSdDodQohDkVIqlWJbW5sJgGEYAOD7/pBLpdg0TV97BEiSBABgWRZpmr52CRBFEQBgz/P+aQEAwzB+7fE/gGkaAOD7/qDL5fKaR4A8zwMA2LZtqKoqj8sE8DyPwzIBLMvCNE3fegRIkoQsywIAmqbpW48A8jwnnE4nAEBKuVxuEIBt25imaTzOEyBNUzhPA8iyjHEcR57n5HI5LpcLruvCNE3EcZzP+wRIf9u2+b1eD3meE8dxYFlWqVSCIAj4vq+qKvM8J5fL+b1PABAEgao/BwB4ngcAVVX5vr/f+wQIAgCAIAhIkoRpmgBAmqYsy8L3fQDg+/6gy/UuIEmSNE2D53kAwDAMBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkBEHAcZzP+wTEcZwvFosAQJIkxRj7+w9LPCxsbGxs/L/4D19rB8M6l/iLAAAAAElFTkSuQmCC" alt="N-Tech Logo" className="h-16 w-auto" /> );
+const GoogleIcon = () => (<svg className="w-6 h-6" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"></path><path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z"></path><path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"></path><path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571l6.19 5.238C44.599 36.337 48 30.836 48 24c0-1.341-.138-2.65-.389-3.917z"></path></svg>);
+const LogoutIcon = () => (<svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>);
+const LoadingSpinner = () => (<svg className="animate-spin h-10 w-10 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>);
+const TrashIcon = () => (<svg className="w-5 h-5 text-gray-400 hover:text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>);
+const ChevronUpIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>;
+const ChevronDownIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>;
+const UserHistoryIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-400 hover:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+const CloseIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>;
+const CheckCircleIcon = ({ className }) => (<svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clipRule="evenodd" /></svg>);
+const MicIcon = ({ className }) => (<svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4V4c0-2.21-1.79-4-4-4S8 1.79 8 4v4c0 2.21 1.79 4 4 4zm-2-4c0-1.1.9-2 2-2s2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2V8zm10 4h-2c0 3.31-2.69 6-6 6s-6-2.69-6-6H4c0 4.42 3.58 8 8 8v3h2v-3c4.42 0 8-3.58 8-8z"/></svg>);
+const ScannerBox = () => (<div className="relative w-64 h-40 sm:w-80 sm:h-36 my-4"><div className="w-full h-full border-2 border-dashed border-cyan-400/50 rounded-lg"></div><div className="absolute top-0 left-0 w-full h-1 bg-cyan-400 shadow-[0_0_10px_theme(colors.cyan.400)] animate-scan"></div><div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-cyan-400 rounded-tl-lg"></div><div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-cyan-400 rounded-tr-lg"></div><div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-cyan-400 rounded-bl-lg"></div><div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-cyan-400 rounded-br-lg"></div></div>);
+
+// --- Main App Component ---
+export default function App() {
+    const [view, setView] = useState('kiosk');
+    const [kioskFlow, setKioskFlow] = useState('home');
+    const [user, setUser] = useState(null);
+    const [userInfo, setUserInfo] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [authAttempted, setAuthAttempted] = useState(false);
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+
+    useEffect(() => {
+        try {
+            const app = initializeApp(firebaseConfig);
+            const firestoreDb = getFirestore(app);
+            const firebaseAuth = getAuth(app);
+            setDb(firestoreDb);
+            setAuth(firebaseAuth);
+
+            onAuthStateChanged(firebaseAuth, async (authUser) => {
+                setAuthAttempted(true);
+                if (authUser) {
+                    setUser(authUser);
+                    const userDocRef = doc(firestoreDb, 'users', authUser.uid);
+                    const unsubscribe = onSnapshot(userDocRef, (doc) => {
+                        if (doc.exists()) {
+                            setUserInfo({ id: doc.id, ...doc.data() });
+                        } else {
+                            setUserInfo({ role: 'guest' });
+                        }
+                        setLoading(false);
+                    });
+                    return () => unsubscribe();
+                } else {
+                    setUser(null);
+                    setUserInfo(null);
+                    setView('kiosk');
+                    setKioskFlow('home');
+                    setLoading(false);
+                }
+            });
+        } catch (e) {
+            console.error("Firebase init error:", e);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (userInfo && view === 'kiosk') {
+            if (userInfo.role === 'technician') {
+                setView('admin');
+            } else if (userInfo.role === 'leadership') {
+                setView('leadership');
+            }
+        }
+    }, [userInfo, view]);
+
+    const handleGoogleSignIn = async () => {
+        if (!auth || !db) return;
+        const provider = new GoogleAuthProvider();
+        try {
+            const result = await signInWithPopup(auth, provider);
+            const authUser = result.user;
+            const email = authUser.email;
+
+            const domain = email.substring(email.lastIndexOf('@') + 1);
+            if (domain !== 'normanps.org') {
+                alert("Access Denied. Please sign in with your normanps.org Google account.");
+                await signOut(auth);
+                return;
+            }
+
+            const userDocRef = doc(db, 'users', authUser.uid);
+            const userDoc = await getDoc(userDocRef);
+
+            if (!userDoc.exists() || (userDoc.data().role !== 'technician' && userDoc.data().role !== 'leadership')) {
+                alert("Access Denied. Your account does not have administrative privileges for this system.");
+                await signOut(auth);
+                return;
+            }
+        } catch (error) {
+            console.error("Authentication error:", error);
+        }
+    };
+
+    const handleSignOut = () => {
+        if (auth) {
+            signOut(auth);
+        }
+    };
+
+    const resetToKioskHome = () => {
+        setView('kiosk');
+        setKioskFlow('home');
+    };
+
+    if (loading || !authAttempted) {
+        return (
+            <div className="w-screen h-screen bg-gray-900 flex justify-center items-center">
+                <LoadingSpinner />
+            </div>
+        );
+    }
+
+    const renderView = () => {
+        if (view === 'admin' && (userInfo?.role === 'technician' || userInfo?.role === 'leadership')) {
+            return <AdminDashboard db={db} setView={setView} userInfo={userInfo} />;
+        }
+        if (view === 'leadership' && userInfo?.role === 'leadership') {
+            return <LeadershipDashboard db={db} auth={auth} setView={setView} />;
+        }
+        switch (kioskFlow) {
+            case 'home': return <KioskHome setKioskFlow={setKioskFlow} />;
+            case 'checkin': return <CheckInFlow db={db} onExit={resetToKioskHome} />;
+            case 'message': return <LeaveMessageFlow db={db} onExit={resetToKioskHome} />;
+            case 'waiver': return <DamageWaiverFlow onExit={resetToKioskHome} />;
+            default: return <KioskHome setKioskFlow={setKioskFlow} />;
+        }
+    };
+
+    return (
+        <div className="w-screen h-screen bg-gray-800 text-white flex flex-col font-sans">
+             <style>{`@keyframes scan { 0% { top: 0; } 100% { top: calc(100% - 4px); } } .animate-scan { animation: scan 2s linear infinite alternate; }`}</style>
+            <Header user={user} userInfo={userInfo} onSignIn={handleGoogleSignIn} onSignOut={handleSignOut} setView={setView} onLogoClick={resetToKioskHome} />
+            <main className="flex-grow overflow-y-auto">{renderView()}</main>
+        </div>
+    );
+}
+
+const Header = ({ user, userInfo, onSignIn, onSignOut, setView, onLogoClick }) => (
+    <header className="bg-gray-900/80 backdrop-blur-sm shadow-lg p-4 flex justify-between items-center z-50">
+        <div className="flex items-center gap-4 cursor-pointer" onClick={onLogoClick}>
+            <NTechLogo />
+            <div>
+                <h1 className="text-2xl font-bold text-white">Tech Support Kiosk</h1>
+                <p className="text-md text-cyan-300">Norman Public Schools</p>
+            </div>
+        </div>
+        <div className="flex items-center gap-4">
+            {user && userInfo && userInfo.role !== 'guest' ? (
+                <>
+                    {userInfo.role === 'technician' && (
+                        <button onClick={() => setView('admin')} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-md font-semibold">Tech Dashboard</button>
+                    )}
+                    {userInfo.role === 'leadership' && (
+                        <button onClick={() => setView('leadership')} className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-md font-semibold">Leadership</button>
+                    )}
+                    <div className="text-right">
+                        <p className="font-semibold">{user.displayName}</p>
+                        <p className="text-sm text-gray-400 capitalize">{userInfo.role}</p>
+                    </div>
+                    <button onClick={onSignOut} className="flex items-center px-4 py-2 bg-red-600 hover:bg-red-500 rounded-md font-semibold">
+                        <LogoutIcon /> Sign Out
+                    </button>
+                </>
+            ) : (
+                <button onClick={onSignIn} className="flex items-center gap-2 px-4 py-2 bg-white text-gray-800 rounded-md font-semibold hover:bg-gray-200 transition-colors">
+                    <GoogleIcon /> Admin Sign In
+                </button>
+            )}
+        </div>
+    </header>
+);
+
+const KioskHome = ({ setKioskFlow }) => (
+    <div className="h-full flex flex-col justify-center items-center p-8 text-center">
+        <h2 className="text-5xl font-bold mb-4">How can we help you today?</h2>
+        <p className="text-xl text-gray-300 mb-12 max-w-2xl">Please select an option below to get started.</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-6xl">
+            <KioskButton title="Check In For Tech Help" description="Report a problem with your device and get in the queue." onClick={() => setKioskFlow('checkin')} />
+            <KioskButton title="Leave a Message" description="Leave a video message for your site tech if they are unavailable." onClick={() => setKioskFlow('message')} />
+            <KioskButton title="Fill Out Damage Waiver" description="Complete the form to request a waiver for an accidental damage copay." onClick={() => setKioskFlow('waiver')} />
+        </div>
+    </div>
+);
+
+const KioskButton = ({ title, description, onClick }) => (
+    <button onClick={onClick} className="bg-gray-700/50 hover:bg-cyan-600/50 border-2 border-gray-600 hover:border-cyan-400 rounded-2xl p-8 flex flex-col justify-center items-center text-center transition-all duration-300 transform hover:scale-105">
+        <h3 className="text-3xl font-bold text-cyan-300 mb-3">{title}</h3>
+        <p className="text-gray-300">{description}</p>
+    </button>
+);
+
+const DamageWaiverFlow = ({ onExit }) => {
+    const waiverUrl = "https://docs.google.com/forms/d/1LCtxvMNAGs19vJBb5aASjQ5C2e9Gak8_9KsA-vTRWA4/viewform?embedded=true";
+    return (
+        <div className="h-full flex flex-col items-center justify-center p-4">
+            <div className="w-full max-w-4xl h-[90%] bg-white rounded-t-lg overflow-hidden flex flex-col">
+                <iframe src={waiverUrl} title="Damage Waiver Form" width="100%" height="100%" frameBorder="0" marginHeight="0" marginWidth="0">Loading…</iframe>
+            </div>
+            <button onClick={onExit} className="w-full max-w-4xl flex-shrink-0 px-4 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-b-lg font-bold text-lg">Done - Return to Kiosk Home</button>
+        </div>
+    );
+};
+
+const AdminDashboard = ({ db, setView, userInfo }) => {
+    const [tickets, setTickets] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [selectedTickets, setSelectedTickets] = useState(new Set());
+    const [filter, setFilter] = useState('');
+    const [sortConfig, setSortConfig] = useState({ key: 'createdAt', direction: 'descending' });
+    const [isCloseModalOpen, setCloseModalOpen] = useState(false);
+    const [isHistoryModalOpen, setHistoryModalOpen] = useState(false);
+    const [currentUserForHistory, setCurrentUserForHistory] = useState(null);
+    const [ticketToClose, setTicketToClose] = useState(null);
+    const [resolutionNotes, setResolutionNotes] = useState('');
+
+    useEffect(() => {
+        const q = query(collection(db, "tickets"), where("status", "==", "Open"));
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const ticketsData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setTickets(ticketsData);
+            setLoading(false);
+        });
+        return () => unsubscribe();
+    }, [db]);
+
+    const filteredTickets = React.useMemo(() => {
+        return tickets.filter(ticket =>
+            Object.values(ticket).some(val => String(val).toLowerCase().includes(filter.toLowerCase()))
+        ).sort((a, b) => {
+            if (!sortConfig.key) return 0;
+            const valA = a[sortConfig.key] || '';
+            const valB = b[sortConfig.key] || '';
+            if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
+            if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
+            return 0;
+        });
+    }, [tickets, filter, sortConfig]);
+
+    const handleSelectAll = (e) => {
+        if (e.target.checked) {
+            setSelectedTickets(new Set(filteredTickets.map(t => t.id)));
+        } else {
+            setSelectedTickets(new Set());
+        }
+    };
+    const handleSelectTicket = (id) => {
+        const newSelection = new Set(selectedTickets);
+        newSelection.has(id) ? newSelection.delete(id) : newSelection.add(id);
+        setSelectedTickets(newSelection);
+    };
+    const handleSort = (key) => {
+        const direction = (sortConfig.key === key && sortConfig.direction === 'ascending') ? 'descending' : 'ascending';
+        setSortConfig({ key, direction });
+    };
+    const openCloseModal = (ticket) => {
+        setTicketToClose(ticket);
+        setCloseModalOpen(true);
+    };
+    const openHistoryModal = (schoolId) => {
+        setCurrentUserForHistory(schoolId);
+        setHistoryModalOpen(true);
+    };
+    const handleSingleClose = async () => {
+        if (!ticketToClose) return;
+        const ticketRef = doc(db, "tickets", ticketToClose.id);
+        await updateDoc(ticketRef, {
+            status: "Closed",
+            closedAt: new Date().toISOString(),
+            resolutionNotes: resolutionNotes
+        });
+        setCloseModalOpen(false);
+        setResolutionNotes('');
+        setTicketToClose(null);
+    };
+    const handleBulkClose = async () => {
+        if (selectedTickets.size === 0 || !window.confirm(`Are you sure you want to close ${selectedTickets.size} tickets?`)) return;
+        const batch = writeBatch(db);
+        selectedTickets.forEach(ticketId => {
+            const ticketRef = doc(db, "tickets", ticketId);
+            batch.update(ticketRef, { status: "Closed", closedAt: new Date().toISOString(), resolutionNotes: "Bulk Closed." });
+        });
+        await batch.commit();
+        setSelectedTickets(new Set());
+    };
+    const SortableHeader = ({ field, label }) => (
+        <th className="p-3 cursor-pointer" onClick={() => handleSort(field)}>
+            <div className="flex items-center gap-1">
+                {label}
+                {sortConfig.key === field && (sortConfig.direction === 'ascending' ? <ChevronUpIcon /> : <ChevronDownIcon />)}
+            </div>
+        </th>
+    );
+    return (
+        <div className="p-8">
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-3xl font-bold">Technician Dashboard</h2>
+                {userInfo?.role === 'leadership' && (
+                    <button onClick={() => setView('leadership')} className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-md font-semibold">
+                        Back to Leadership View
+                    </button>
+                )}
+            </div>
+            <div className="flex justify-between items-center mb-4">
+                <input type="text" placeholder="Filter tickets..." className="bg-gray-700 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-400" value={filter} onChange={(e) => setFilter(e.target.value)} />
+                {selectedTickets.size > 0 && (
+                    <button onClick={handleBulkClose} className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded-md font-semibold">
+                        Close {selectedTickets.size} Selected Tickets
+                    </button>
+                )}
+            </div>
+            <div className="bg-gray-900/50 rounded-lg overflow-x-auto">
+                <table className="w-full text-left">
+                    <thead className="bg-gray-700/50">
+                        <tr>
+                            <th className="p-3"><input type="checkbox" onChange={handleSelectAll} checked={selectedTickets.size > 0 && selectedTickets.size === filteredTickets.length} /></th>
+                            <SortableHeader field="createdAt" label="Time" />
+                            <SortableHeader field="requestorName" label="Requestor" />
+                            <SortableHeader field="schoolId" label="School ID" />
+                            <th className="p-3">Device</th>
+                            <th className="p-3">Problem</th>
+                            <th className="p-3">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading ? (
+                            <tr><td colSpan="7" className="text-center p-4">Loading tickets...</td></tr>
+                        ) : filteredTickets.map(ticket => (
+                            <tr key={ticket.id} className="border-b border-gray-700 hover:bg-gray-800/50">
+                                <td className="p-3"><input type="checkbox" checked={selectedTickets.has(ticket.id)} onChange={() => handleSelectTicket(ticket.id)} /></td>
+                                <td className="p-3">{new Date(ticket.createdAt).toLocaleTimeString()}</td>
+                                <td className="p-3">{ticket.requestorName || 'N/A'}</td>
+                                <td className="p-3">
+                                    <div className="flex items-center gap-2">
+                                        {ticket.schoolId || 'N/A'}
+                                        <button onClick={() => openHistoryModal(ticket.schoolId)} title="View User History"><UserHistoryIcon /></button>
+                                    </div>
+                                </td>
+                                <td className="p-3">{ticket.device || 'N/A'}</td>
+                                <td className="p-3 truncate max-w-xs">{ticket.problemDescription || 'N/A'}</td>
+                                <td className="p-3">
+                                    <div className="flex gap-4">
+                                        <a href={ticket.videoLink || '#'} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">Video</a>
+                                        <button onClick={() => openCloseModal(ticket)} className="text-green-400 hover:underline">Close</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        ))}
+                        {filteredTickets.length === 0 && !loading && (
+                            <tr><td colSpan="7" className="text-center p-4">No open tickets found.</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+            {isCloseModalOpen && <CloseTicketModal ticket={ticketToClose} notes={resolutionNotes} setNotes={setResolutionNotes} onConfirm={handleSingleClose} onCancel={() => setCloseModalOpen(false)} />}
+            {isHistoryModalOpen && <UserHistoryModal db={db} schoolId={currentUserForHistory} onCancel={() => setHistoryModalOpen(false)} />}
+        </div>
+    );
+};
+
+const CloseTicketModal = ({ ticket, notes, setNotes, onConfirm, onCancel }) => (
+    <div className="fixed inset-0 bg-black/60 flex justify-center items-center z-50">
+        <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-2xl font-bold mb-4">Close Ticket for {ticket.requestorName}</h3>
+            <p className="mb-2"><strong className="text-gray-400">Problem:</strong> {ticket.problemDescription}</p>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Add optional resolution notes..." className="w-full bg-gray-700 p-2 rounded-md h-32 mb-4 focus:outline-none focus:ring-2 focus:ring-cyan-400" />
+            <div className="flex justify-end gap-4">
+                <button onClick={onCancel} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-md">Cancel</button>
+                <button onClick={onConfirm} className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-md font-semibold">Confirm Close</button>
+            </div>
+        </div>
+    </div>
+);
+
+const UserHistoryModal = ({ db, schoolId, onCancel }) => {
+    const [history, setHistory] = useState([]);
+    const [loading, setLoading] = useState(true);
+    useEffect(() => {
+        async function fetchHistory() {
+            setLoading(true);
+            const q = query(collection(db, "tickets"), where("schoolId", "==", schoolId));
+            const querySnapshot = await getDocs(q);
+            const tickets = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setHistory(tickets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+            setLoading(false);
+        }
+        if (schoolId) fetchHistory();
+    }, [db, schoolId]);
+    return (
+        <div className="fixed inset-0 bg-black/60 flex justify-center items-center z-50">
+            <div className="bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[80vh] flex flex-col">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-2xl font-bold">Ticket History for ID: {schoolId}</h3>
+                    <button onClick={onCancel}><CloseIcon /></button>
+                </div>
+                <div className="overflow-y-auto">
+                    {loading ? <LoadingSpinner /> : (
+                        <div className="space-y-4">
+                            {history.length > 0 ? history.map(ticket => (
+                                <div key={ticket.id} className="bg-gray-900/50 p-3 rounded-md">
+                                    <p><strong>Date:</strong> {new Date(ticket.createdAt).toLocaleDateString()}</p>
+                                    <p><strong>Status:</strong> <span className={ticket.status === 'Open' ? 'text-yellow-400' : 'text-green-400'}>{ticket.status}</span></p>
+                                    <p><strong>Problem:</strong> {ticket.problemDescription}</p>
+                                    {ticket.status === 'Closed' && <p className="text-sm text-gray-400 mt-1"><strong>Notes:</strong> {ticket.resolutionNotes || 'N/A'}</p>}
+                                </div>
+                            )) : <p>No ticket history found for this user.</p>}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const LeadershipDashboard = ({ db, auth, setView }) => {
+    const [activeTab, setActiveTab] = useState('analytics');
+    return (
+        <div className="p-8">
+            <div className="flex justify-between items-center">
+                <h2 className="text-3xl font-bold mb-6">Leadership Dashboard</h2>
+                <div className="flex gap-2">
+                    <button onClick={() => setView('admin')} className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 font-semibold">
+                        Switch to Technician View
+                    </button>
+                    <button onClick={() => setActiveTab('analytics')} className={`px-4 py-2 rounded-md ${activeTab === 'analytics' ? 'bg-purple-600' : 'bg-gray-700'}`}>Analytics</button>
+                    <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-md ${activeTab === 'users' ? 'bg-purple-600' : 'bg-gray-700'}`}>Manage Users</button>
+                    <button onClick={() => setActiveTab('locations')} className={`px-4 py-2 rounded-md ${activeTab === 'locations' ? 'bg-purple-600' : 'bg-gray-700'}`}>Tech Assignments</button>
+                </div>
+            </div>
+            <div className="mt-6">
+                {activeTab === 'analytics' && <TicketAnalytics db={db} />}
+                {activeTab === 'users' && <UserManagementPanel db={db} auth={auth} />}
+                {activeTab === 'locations' && <LocationManagementPanel db={db} />}
+            </div>
+        </div>
+    );
+};
+
+const TicketAnalytics = ({ db }) => (
+    <div>
+        <h3 className="text-2xl font-semibold mb-4">District Analytics</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <div className="bg-gray-900/50 p-4 rounded-lg"><h4 className="text-gray-400">Open Tickets</h4><p className="text-3xl font-bold">--</p></div>
+            <div className="bg-gray-900/50 p-4 rounded-lg"><h4 className="text-gray-400">Avg. Resolution Time</h4><p className="text-3xl font-bold">--</p></div>
+            <div className="bg-gray-900/50 p-4 rounded-lg"><h4 className="text-gray-400">Tickets Today</h4><p className="text-3xl font-bold">--</p></div>
+        </div>
+        <div className="bg-gray-900/50 p-6 rounded-lg h-96 flex items-center justify-center">
+            <p className="text-gray-400">Charts and metrics will be displayed here.</p>
+        </div>
+        <div className="bg-gray-900/50 p-6 rounded-lg mt-6">
+            <h4 className="text-xl font-bold mb-4">AI Weekly Briefing</h4>
+            <p className="text-gray-400">The weekly summary from Gemini will appear here every Monday morning.</p>
+        </div>
+    </div>
+);
+
+const UserManagementPanel = ({ db, auth }) => {
+    const [users, setUsers] = useState([]);
+    const [newUserEmail, setNewUserEmail] = useState('');
+    const [newUserName, setNewUserName] = useState('');
+    const [newUserRole, setNewUserRole] = useState('technician');
+    const [statusMessage, setStatusMessage] = useState('');
+
+    useEffect(() => {
+        const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
+            setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        });
+        return () => unsubscribe();
+    }, [db]);
+
+    const handleAddUser = async (e) => {
+        e.preventDefault();
+        if (!newUserEmail || !newUserName) {
+            setStatusMessage("Please provide both an email and a name.");
+            return;
+        }
+        setStatusMessage("Authorizing user...");
+
+        try {
+            const idToken = await auth.currentUser.getIdToken();
+            const response = await fetch(`${FIREBASE_FUNCTIONS_URL}/api/preauthorizeUser`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify({
+                    email: newUserEmail,
+                    name: newUserName,
+                    role: newUserRole
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                setStatusMessage(`Success! User ${newUserName} has been authorized.`);
+                setNewUserEmail('');
+                setNewUserName('');
+            } else {
+                throw new Error(result.error || "An unknown error occurred.");
+            }
+        } catch (error) {
+            setStatusMessage(`Error: ${error.message}`);
+            console.error("Error pre-authorizing user:", error);
+        }
+    };
+
+    const handleDeleteUser = async (userId) => {
+        if (window.confirm("Are you sure? This will remove the user's role, and they will lose access.")) {
+            await updateDoc(doc(db, "users", userId), { role: 'guest' });
+        }
+    };
+    return (
+        <div className="bg-gray-900/50 p-6 rounded-lg max-w-3xl mx-auto">
+            <h4 className="text-xl font-bold mb-4">Manage Users</h4>
+            <form onSubmit={handleAddUser} className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <input type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} placeholder="User's @normanps.org Email" className="bg-gray-700 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-400" />
+                <input type="text" value={newUserName} onChange={(e) => setNewUserName(e.target.value)} placeholder="User's Full Name" className="bg-gray-700 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-400" />
+                <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)} className="bg-gray-700 p-2 rounded-md">
+                    <option value="technician">Technician</option>
+                    <option value="leadership">Leadership</option>
+                </select>
+                <button type="submit" className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-md font-semibold">Pre-Authorize User</button>
+            </form>
+            {statusMessage && <p className="text-center mb-4 text-yellow-300">{statusMessage}</p>}
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+                {users.filter(u => u.role !== 'guest').map(user => (
+                    <div key={user.id} className="flex justify-between items-center bg-gray-800/50 p-2 rounded-md">
+                        <div>
+                            <p className="font-semibold">{user.name || user.email}</p>
+                            <p className="text-sm text-cyan-300 capitalize">{user.role}</p>
+                        </div>
+                        <button onClick={() => handleDeleteUser(user.id)}><TrashIcon /></button>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const LocationManagementPanel = ({ db }) => {
+    const [locations, setLocations] = useState([]);
+    const [techs, setTechs] = useState([]);
+    useEffect(() => {
+        const unsubLocations = onSnapshot(collection(db, "locations"), (snapshot) => {
+            const locs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            // Sort locations alphabetically by name
+            locs.sort((a, b) => a.name.localeCompare(b.name));
+            setLocations(locs);
+        });
+        const unsubTechs = onSnapshot(query(collection(db, "users"), where("role", "==", "technician")), (snapshot) => {
+            setTechs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        });
+        return () => {
+            unsubLocations();
+            unsubTechs();
+        };
+    }, [db]);
+
+    const handleAssignmentChange = async (locationId, techEmail, isChecked) => {
+        const locationRef = doc(db, "locations", locationId);
+        try {
+            if (isChecked) {
+                await updateDoc(locationRef, {
+                    assignedTechEmails: arrayUnion(techEmail)
+                });
+            } else {
+                await updateDoc(locationRef, {
+                    assignedTechEmails: arrayRemove(techEmail)
+                });
+            }
+        } catch (error) {
+            console.error("Error updating location assignments: ", error);
+        }
+    };
+
+    return (
+        <div className="bg-gray-900/50 p-6 rounded-lg max-w-3xl mx-auto">
+            <h4 className="text-xl font-bold mb-4">Manage Tech Assignments</h4>
+            <div className="space-y-4">
+                {locations.map(loc => (
+                    <div key={loc.id} className="bg-gray-800/50 p-4 rounded-md">
+                        <p className="font-semibold mb-3 text-lg text-cyan-300">{loc.name}</p>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            {techs.map(tech => (
+                                <label key={tech.id} className="flex items-center gap-2 p-2 rounded-md hover:bg-gray-700/50 transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        className="form-checkbox bg-gray-700 border-gray-600 text-cyan-500 h-5 w-5 rounded focus:ring-cyan-500 focus:ring-offset-gray-800"
+                                        checked={loc.assignedTechEmails?.includes(tech.email) || false}
+                                        onChange={(e) => handleAssignmentChange(loc.id, tech.email, e.target.checked)}
+                                    />
+                                    <span>{tech.name || tech.email}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};

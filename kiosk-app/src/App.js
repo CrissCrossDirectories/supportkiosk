@@ -1,0 +1,2126 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, onSnapshot, getDoc, query, where, getDocs, updateDoc, writeBatch, arrayUnion, arrayRemove, addDoc } from 'firebase/firestore';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+
+
+// --- Configuration ---
+const firebaseConfig = {
+    apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+    authDomain: "supportkiosk-b43dd.firebaseapp.com",
+    projectId: "supportkiosk-b43dd",
+    storageBucket: "supportkiosk-b43dd.firestorageapp",
+    messagingSenderId: "315490541997",
+    appId: "1:315490541997:web:21c3aff2b67ea72ab94124"
+};
+const FIREBASE_FUNCTIONS_URL = "https://us-central1-supportkiosk-b43dd.cloudfunctions.net";
+const GEMINI_PROXY_URL = `${FIREBASE_FUNCTIONS_URL}/api/geminiProxy`;
+const INCIDENTIQ_PROXY_URL = `${FIREBASE_FUNCTIONS_URL}/api/incidentIqProxy`;
+const VIDEO_UPLOAD_URL = `${FIREBASE_FUNCTIONS_URL}/api/uploadVideo`;
+
+
+// --- Helper Icons (as SVG/React components) ---
+const NTechLogo = () => ( <img src="/ntech-logo.png" alt="N-Tech Logo" className="h-16 w-auto" /> );
+const GoogleIcon = () => (<svg className="w-6 h-6" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"></path><path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z"></path><path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"></path><path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571l6.19 5.238C44.599 36.337 48 30.836 48 24c0-1.341-.138-2.65-.389-3.917z"></path></svg>);
+const LogoutIcon = () => (<svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>);
+const LoadingSpinner = () => (<svg className="animate-spin h-10 w-10 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>);
+const TrashIcon = () => (<svg className="w-5 h-5 text-gray-400 hover:text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>);
+const ChevronUpIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>;
+const ChevronDownIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>;
+const UserHistoryIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-400 hover:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+const CloseIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>;
+const CheckCircleIcon = ({ className }) => (<svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clipRule="evenodd" /></svg>);
+const MicIcon = ({ className }) => (<svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4V4c0-2.21-1.79-4-4-4S8 1.79 8 4v4c0 2.21 1.79 4 4 4zm-2-4c0-1.1.9-2 2-2s2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2V8zm10 4h-2c0 3.31-2.69 6-6 6s-6-2.69-6-6H4c0 4.42 3.58 8 8 8v3h2v-3c4.42 0 8-3.58 8-8z"/></svg>);
+
+// --- Main App Component ---
+export default function App() {
+    const [view, setView] = useState('kiosk');
+    const [kioskFlow, setKioskFlow] = useState('home');
+    const [user, setUser] = useState(null);
+    const [userInfo, setUserInfo] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [authAttempted, setAuthAttempted] = useState(false);
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [cameraDeviceId, setCameraDeviceId] = useState(null);
+
+    useEffect(() => {
+        // Pre-load camera device ID to speed up scanner initialization
+        const getCameraPermission = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const videoTracks = stream.getVideoTracks();
+                if (videoTracks.length > 0) {
+                    // Get the device ID of the first video track
+                    const deviceId = videoTracks[0].getSettings().deviceId;
+                    if (deviceId) {
+                        setCameraDeviceId(deviceId);
+                    }
+                }
+                // Stop the stream tracks as we only needed them for permissions and device ID
+                videoTracks.forEach(track => track.stop());
+            } catch (err) {
+                console.error("Error pre-loading camera:", err);
+                // The user will be prompted for camera access later if it failed here.
+            }
+        };
+        getCameraPermission();
+    }, []);
+
+    useEffect(() => {
+        try {
+            const app = initializeApp(firebaseConfig);
+            const firestoreDb = getFirestore(app);
+            const firebaseAuth = getAuth(app);
+            setDb(firestoreDb);
+            setAuth(firebaseAuth);
+
+            onAuthStateChanged(firebaseAuth, async (authUser) => {
+                setAuthAttempted(true);
+                if (authUser && !authUser.isAnonymous) {
+                    setUser(authUser);
+                    const userDocRef = doc(firestoreDb, 'users', authUser.uid);
+                    const unsubscribe = onSnapshot(userDocRef, (doc) => {
+                        if (doc.exists()) {
+                            setUserInfo({ id: doc.id, ...doc.data() });
+                        } else {
+                            setUserInfo({ role: 'guest' });
+                        }
+                        setLoading(false);
+                    });
+                    return () => unsubscribe();
+                } else {
+                    setUser(null);
+                    setUserInfo(null);
+                    setView('kiosk');
+                    setKioskFlow('home');
+                    setLoading(false);
+                }
+            });
+        } catch (e) {
+            console.error("Firebase init error:", e);
+            setLoading(false); // Ensure loading stops even if Firebase fails
+            setAuthAttempted(true);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (userInfo && view === 'kiosk') {
+            if (userInfo.role === 'technician') {
+                setView('admin');
+            } else if (userInfo.role === 'leadership') {
+                setView('leadership');
+            }
+        }
+    }, [userInfo, view]);
+
+    const handleGoogleSignIn = async () => {
+        if (!auth || !db) return;
+        const provider = new GoogleAuthProvider();
+        try {
+            const result = await signInWithPopup(auth, provider);
+            const authUser = result.user;
+            const email = authUser.email;
+
+            const domain = email.substring(email.lastIndexOf('@') + 1);
+            if (domain !== 'normanps.org') {
+                alert("Access Denied. Please sign in with your normanps.org Google account.");
+                await signOut(auth);
+                return;
+            }
+
+            const userDocRef = doc(db, 'users', authUser.uid);
+            const userDoc = await getDoc(userDocRef);
+
+            if (!userDoc.exists() || (userDoc.data().role !== 'technician' && userDoc.data().role !== 'leadership')) {
+                alert("Access Denied. Your account does not have administrative privileges for this system.");
+                await signOut(auth);
+                return;
+            }
+        } catch (error) {
+            console.error("Authentication error:", error);
+        }
+    };
+
+    const handleSignOut = () => {
+        if (auth) {
+            signOut(auth);
+        }
+    };
+
+    const resetToKioskHome = () => {
+        setView('kiosk');
+        setKioskFlow('home');
+    };
+
+    if (loading || !authAttempted) {
+        return (
+            <div className="w-screen h-screen bg-gray-900 flex justify-center items-center">
+                <LoadingSpinner />
+            </div>
+        );
+    }
+
+    const renderView = () => {
+        // FIX: Prevent kiosk flows from rendering until the main app is fully loaded.
+        if (loading) {
+            return null; // Let the main loading spinner handle the UI
+        }
+        if (view === 'admin' && (userInfo?.role === 'technician' || userInfo?.role === 'leadership')) {
+            return <AdminDashboard db={db} setView={setView} userInfo={userInfo} />;
+        }
+        if (view === 'leadership' && userInfo?.role === 'leadership') {
+            return <LeadershipDashboard db={db} auth={auth} setView={setView} />;
+        }
+        switch (kioskFlow) {
+            case 'home': return <KioskHome setKioskFlow={setKioskFlow} />;
+            case 'checkin': return <CheckInFlow onExit={resetToKioskHome} cameraDeviceId={cameraDeviceId} />;
+            case 'message': return <LeaveMessageFlow onExit={resetToKioskHome} cameraDeviceId={cameraDeviceId} />;
+            case 'waiver': return <DamageWaiverFlow db={db} onExit={resetToKioskHome} cameraDeviceId={cameraDeviceId} />;
+            default: return <KioskHome setKioskFlow={setKioskFlow} />;
+        }
+    };
+
+    return (
+        <div className="w-screen h-screen bg-gray-800 text-white flex flex-col font-sans">
+             <style>{`
+                @keyframes scan { 0% { top: 0; } 100% { top: calc(100% - 4px); } } 
+                .animate-scan { animation: scan 2.5s linear infinite alternate; }
+                .no-select {
+                    -webkit-user-select: none; /* Safari */
+                    -ms-user-select: none; /* IE 10 and IE 11 */
+                    user-select: none; /* Standard syntax */
+                }
+                #scanner-container video {
+                    width: 100% !important;
+                    height: 100% !important;
+                    object-fit: cover !important;
+                    transform: scaleX(-1); /* Flips the video horizontally for a mirror effect */
+                }
+             `}</style>
+            <Header user={user} userInfo={userInfo} onSignIn={handleGoogleSignIn} onSignOut={handleSignOut} setView={setView} onLogoClick={resetToKioskHome} />
+            <main className="flex-grow overflow-y-auto">{renderView()}</main>
+        </div>
+    );
+}
+
+// --- CORE APP COMPONENTS ---
+
+const Header = ({ user, userInfo, onSignIn, onSignOut, setView, onLogoClick }) => (
+    <header className="bg-gray-900/80 backdrop-blur-sm shadow-lg p-4 flex justify-between items-center z-50">
+        <div className="flex items-center gap-4 cursor-pointer" onClick={onLogoClick}>
+            <NTechLogo />
+            <div>
+                <h1 className="text-2xl font-bold text-white">Tech Support Kiosk</h1>
+                <p className="text-md text-cyan-300">Norman Public Schools</p>
+            </div>
+        </div>
+        <div className="flex items-center gap-4">
+            {user && userInfo && userInfo.role !== 'guest' ? (
+                <>
+                    {userInfo.role === 'technician' && (
+                        <button onClick={() => setView('admin')} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-md font-semibold">Tech Dashboard</button>
+                    )}
+                    {userInfo.role === 'leadership' && (
+                        <button onClick={() => setView('leadership')} className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-md font-semibold">Leadership</button>
+                    )}
+                    <div className="text-right">
+                        <p className="font-semibold">{user.displayName}</p>
+                        <p className="text-sm text-gray-400 capitalize">{userInfo.role}</p>
+                    </div>
+                    <button onClick={onSignOut} className="flex items-center px-4 py-2 bg-red-600 hover:bg-red-500 rounded-md font-semibold">
+                        <LogoutIcon /> Sign Out
+                    </button>
+                </>
+            ) : (
+                <button onClick={onSignIn} className="flex items-center gap-2 px-4 py-2 bg-white text-gray-800 rounded-md font-semibold hover:bg-gray-200 transition-colors">
+                    <GoogleIcon /> Admin Sign In
+                </button>
+            )}
+        </div>
+    </header>
+);
+
+const KioskHome = ({ setKioskFlow }) => (
+    <div className="h-full flex flex-col justify-center items-center p-8 text-center">
+        <h2 className="text-5xl font-bold mb-4">How can we help you today?</h2>
+        <p className="text-xl text-gray-300 mb-12 max-w-2xl">Please select an option below to get started.</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-6xl">
+            <KioskButton title="Check In For Tech Help" description="Report a problem with your device and get in the queue." onClick={() => setKioskFlow('checkin')} />
+            <KioskButton title="Leave a Message" description="Leave a video message for your site tech if they are unavailable." onClick={() => setKioskFlow('message')} />
+            <KioskButton title="Fill Out Damage Waiver" description="Complete the form to request a waiver for an accidental damage copay." onClick={() => setKioskFlow('waiver')} />
+        </div>
+    </div>
+);
+
+const KioskButton = ({ title, description, onClick }) => (
+    <button onClick={onClick} className="bg-gray-700/50 hover:bg-cyan-600/50 border-2 border-gray-600 hover:border-cyan-400 rounded-2xl p-8 flex flex-col justify-center items-center text-center transition-all duration-300 transform hover:scale-105 no-select">
+        <h3 className="text-3xl font-bold text-cyan-300 mb-3">{title}</h3>
+        <p className="text-gray-300">{description}</p>
+    </button>
+);
+
+const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
+    const [status, setStatus] = useState('verifying_user');
+    const [iiqUser, setIiqUser] = useState(null);
+    const [userAssets, setUserAssets] = useState([]);
+    const [selectedAsset, setSelectedAsset] = useState(null);
+    const [formData, setFormData] = useState({
+        assetTag: '',
+        waiverReason: '',
+        isFirstRequest: 'Yes',
+        ackFuture: false,
+        ackCare: false,
+    });
+    const [resetSessionTimeoutRef, setResetSessionTimeoutRef] = useState(null);
+    const [isListening, setIsListening] = useState(false);
+    const [interimTranscript, setInterimTranscript] = useState('');
+    const [errorMessage, setErrorMessage] = useState('');
+
+    const recognitionRef = useRef(null);
+    const finalTranscriptRef = useRef('');
+    const silenceTimeoutRef = useRef(null);
+
+    const callProxy = async (url, body) => {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (!response.ok) { throw new Error(`API Error: ${response.status}`); }
+        const text = await response.text();
+        return text ? JSON.parse(text) : {};
+    };
+
+    const getUserAssets = async (UserId) => {
+        try {
+            console.log("DamageWaiverFlow: Fetching assets for UserId:", UserId);
+            const data = await callProxy(INCIDENTIQ_PROXY_URL, { path: '/api/v1.0/assets', method: 'POST', body: { "Filters": [{ "Facet": "User", "Id": UserId }] } });
+            console.log("DamageWaiverFlow: Received assets data:", data.Items);
+            return data.Items || [];
+        } catch (error) {
+            console.error("DamageWaiverFlow: Error fetching user assets:", error);
+            return null;
+        }
+    };
+
+    const handleUserVerified = async (user) => {
+        setIiqUser(user);
+        setStatus('processing');
+        const assets = await getUserAssets(user.UserId);
+        if (assets && assets.length > 0) {
+            setUserAssets(assets);
+            setStatus('selecting_asset');
+        } else {
+            setStatus('filling_form');
+        }
+    };
+
+    const handleAssetSelection = (asset) => {
+        setSelectedAsset(asset);
+        setFormData(prev => ({ ...prev, assetTag: asset?.AssetTag || '' }));
+        setStatus('filling_form');
+    };
+
+    const handleInputChange = (e) => {
+        const { name, value, type, checked } = e.target;
+        setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!iiqUser || !db) return;
+
+        setStatus('submitting');
+        try {
+            const waiverData = {
+                ...formData,
+                assetDescription: selectedAsset?.Name || 'N/A',
+                timestamp: new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }),
+                userName: iiqUser.Name,
+                userEmail: iiqUser.Email,
+                schoolId: iiqUser.SchoolIdNumber,
+                userLocation: iiqUser.Location?.Name,
+            };
+            await addDoc(collection(db, "waivers"), waiverData);
+            setStatus('submitted');
+            const timeout = setTimeout(onExit, 10000);
+            setResetSessionTimeoutRef(timeout);
+        } catch (error) {
+            console.error("Error submitting waiver:", error);
+            setErrorMessage(error.message);
+            setStatus('error');
+        }
+    };
+
+    const summarizeWaiverReason = async (transcript) => {
+        setStatus('processing');
+        const prompt = `Concisely summarize the following reason for a fee waiver request into one paragraph: "${transcript}"`;
+        const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }]};
+        try {
+            const result = await callProxy(GEMINI_PROXY_URL, { body: payload });
+            const summary = result.candidates[0].content.parts[0].text;
+            setFormData(prev => ({ ...prev, waiverReason: summary }));
+        } catch (e) {
+            setFormData(prev => ({ ...prev, waiverReason: transcript }));
+        } finally {
+            setStatus('filling_form');
+        }
+    };
+    
+    const handleListenStart = (event) => {
+        event.preventDefault(); 
+        finalTranscriptRef.current = '';
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert("Speech recognition not supported on this browser.");
+            return;
+        }
+        
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => setIsListening(true);
+        recognition.onend = () => setIsListening(false);
+        recognition.onerror = (event) => console.error("Speech error:", event.error);
+        
+        recognition.onresult = (event) => {
+            let final = '';
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) { final += event.results[i][0].transcript; } 
+                else { interim += event.results[i][0].transcript; }
+            }
+            setInterimTranscript(interim);
+            if (final) { finalTranscriptRef.current += final + ' '; }
+        };
+        
+        recognition.start();
+        recognitionRef.current = recognition; 
+    };
+
+    const handleListenStop = (event) => {
+        event.preventDefault(); 
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+        }
+        silenceTimeoutRef.current = setTimeout(() => {
+            if (finalTranscriptRef.current) {
+                summarizeWaiverReason(finalTranscriptRef.current.trim());
+                finalTranscriptRef.current = '';
+            }
+        }, 2500);
+    };
+
+    useEffect(() => {
+        return () => {
+            if (resetSessionTimeoutRef) clearTimeout(resetSessionTimeoutRef);
+            if (recognitionRef.current) {
+                recognitionRef.current.stop();
+                recognitionRef.current = null;
+            }
+        };
+    }, [resetSessionTimeoutRef]);
+
+    if (status === 'verifying_user') {
+        return <UserVerification onUserVerified={handleUserVerified} onExit={onExit} cameraDeviceId={cameraDeviceId} />;
+    }
+    
+    if (status === 'processing' || status === 'submitting') {
+        return <div className="h-full flex items-center justify-center"><LoadingSpinner /></div>;
+    }
+
+    if (status === 'selecting_asset') {
+        return (
+            <div className="h-full flex flex-col items-center justify-center p-4">
+                <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl max-w-3xl w-full shadow-2xl border border-gray-500 flex flex-col items-center text-center">
+                    <h2 className="text-3xl font-semibold text-cyan-400 mb-4">Which device is this waiver for?</h2>
+                    <div className="max-h-64 overflow-y-auto grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 p-2">
+                        {userAssets.map(asset => (
+                            <button key={asset.AssetId} onClick={() => handleAssetSelection(asset)} className="bg-cyan-600/50 hover:bg-cyan-500/80 text-white font-bold py-3 px-4 rounded-lg text-left no-select">
+                                <p className="text-base">{asset.Name}</p>
+                                <p className="text-xs text-cyan-200">Tag: {asset.AssetTag || 'N/A'}</p>
+                            </button>
+                        ))}
+                         <button onClick={() => handleAssetSelection(null)} className="bg-gray-600/50 hover:bg-gray-500/80 text-white font-bold py-3 px-4 rounded-lg no-select">It's something else</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (status === 'submitted') {
+        return (
+            <div className="h-full flex items-center justify-center p-8">
+                <div className="bg-teal-900/80 backdrop-blur-md p-8 rounded-2xl max-w-3xl w-full shadow-2xl border-2 border-cyan-500 text-center">
+                    <CheckCircleIcon className="w-20 h-20 mx-auto text-cyan-400" />
+                    <h2 className="text-4xl font-bold mt-4">Waiver Submitted!</h2>
+                    <p className="text-xl mt-4">Thank you. Please see your site technician to get your device repaired or to be issued a replacement.</p>
+                    <p className="text-md mt-2 text-gray-300">This screen will reset automatically.</p>
+                </div>
+            </div>
+        );
+    }
+    
+    if (status === 'error') {
+         return (
+            <div className="h-full flex items-center justify-center p-8 text-center">
+                 <h2 className="text-4xl font-bold text-yellow-400">{errorMessage || "There was an error submitting your form."}</h2>
+                 <p className="text-xl mt-4">Please try again or see a technician for help.</p>
+                 <button onClick={onExit} className="mt-8 px-6 py-3 bg-cyan-600 rounded-lg font-bold">Return Home</button>
+            </div>
+        );
+    }
+
+    return (
+        <div className="h-full flex flex-col items-center justify-center p-4">
+            <div className="w-full max-w-4xl bg-gray-900/80 backdrop-blur-md p-8 rounded-2xl">
+                <h2 className="text-3xl font-bold text-cyan-300 mb-2">Device Damage Waiver Form</h2>
+                <p className="text-lg mb-6">For: <span className="font-bold">{iiqUser.Name}</span> ({iiqUser.Location?.Name})</p>
+                <form onSubmit={handleSubmit} className="space-y-6">
+                    <div>
+                        <label className="block text-lg text-gray-300 mb-2">Asset Tag #</label>
+                        <div className="flex items-center gap-4">
+                           <input type="text" name="assetTag" value={formData.assetTag} className="w-1/3 bg-gray-800 p-3 rounded-md focus:outline-none cursor-not-allowed" readOnly />
+                           <p className="text-gray-400 flex-1">{selectedAsset?.Name || 'No device selected'}</p>
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-lg text-gray-300 mb-2">Reason for copayment waiver request</label>
+                        <textarea name="waiverReason" value={formData.waiverReason} onChange={handleInputChange} placeholder="You can type here, or use the button below to speak." className="w-full bg-gray-700 p-3 rounded-md h-24 focus:outline-none focus:ring-2 focus:ring-cyan-400" required />
+                        <HoldToSpeakButton isListening={isListening} onListenStart={handleListenStart} onListenStop={handleListenStop} interimTranscript={interimTranscript} />
+                    </div>
+                    
+                    <div>
+                        <label className="text-lg text-gray-300">This is my first device repair copayment waiver request.</label>
+                        <div className="flex gap-4 mt-2">
+                            <label className="flex items-center gap-2"><input type="radio" name="isFirstRequest" value="Yes" checked={formData.isFirstRequest === 'Yes'} onChange={handleInputChange} className="form-radio bg-gray-700 border-gray-600 text-cyan-500 h-5 w-5" /> Yes</label>
+                            <label className="flex items-center gap-2"><input type="radio" name="isFirstRequest" value="No" checked={formData.isFirstRequest === 'No'} onChange={handleInputChange} className="form-radio bg-gray-700 border-gray-600 text-cyan-500 h-5 w-5" /> No</label>
+                        </div>
+                    </div>
+
+                    <div className="space-y-3">
+                        <label className="flex items-start gap-3 text-gray-300">
+                            <input type="checkbox" name="ackFuture" checked={formData.ackFuture} onChange={handleInputChange} className="form-checkbox bg-gray-700 border-gray-600 text-cyan-500 h-5 w-5 mt-1" required />
+                            <span>I understand that future copayment requests may not be approved and will require the review and approval of school administration and Technology Services.</span>
+                        </label>
+                         <label className="flex items-start gap-3 text-gray-300">
+                            <input type="checkbox" name="ackCare" checked={formData.ackCare} onChange={handleInputChange} className="form-checkbox bg-gray-700 border-gray-600 text-cyan-500 h-5 w-5 mt-1" required />
+                            <span>I understand the importance of taking care of district issued devices and the costs incurred when repairs are needed. I agree to do my best to ensure my device stays in good shape and will safeguard it appropriately.</span>
+                        </label>
+                    </div>
+
+                    <div className="flex justify-end gap-4 pt-4">
+                        <button type="button" onClick={onExit} className="px-6 py-3 bg-gray-600 hover:bg-gray-500 rounded-md">Cancel</button>
+                        <button type="submit" className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-md font-semibold">Submit Waiver</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+// --- REUSABLE KIOSK UI COMPONENTS ---
+const HoldToSpeakButton = ({ isListening, onListenStart, onListenStop, interimTranscript }) => (
+    <div className="mt-4 flex flex-col items-center">
+        <button
+            onMouseDown={onListenStart}
+            onMouseUp={onListenStop}
+            onTouchStart={onListenStart}
+            onTouchEnd={onListenStop}
+            className={`px-8 py-4 rounded-full transition-all duration-200 flex items-center gap-3 no-select ${isListening ? 'bg-red-600 animate-pulse' : 'bg-cyan-600 hover:bg-cyan-500'}`}
+        >
+            <MicIcon className="w-8 h-8 text-white" />
+            <span className="text-white font-bold text-2xl">{isListening ? 'Listening...' : 'Hold to Speak'}</span>
+        </button>
+        <p className="text-2xl italic text-gray-300 mt-4 min-h-[32px]">"{interimTranscript}"</p>
+    </div>
+);
+
+const LiveStatusDisplay = ({ status, interimTranscript, visitorName, iiqUser, problemDescription, identifiedAsset, isListening, errorMessage, potentialUser, potentialUsers, clarificationQuestion, onSelectUser, onTryAgain, userAssets, onAssetSelect, onCreateTicket, onRedoProblem, onConfirmUser, onListenStart, onListenStop, ticketDetails, scannerContainerRef }) => {
+    let message = "";
+    if (status === 'initializing') message = "Initializing systems...";
+    if (status === 'awaiting_scan') message = "Please align your ID badge inside the box.";
+    if (status === 'awaiting_name') message = "I couldn't locate you. Please hold the button and say your name.";
+    if (status === 'awaiting_selection') message = "I found a few people. Please tap your name to continue.";
+    if (status === 'awaiting_asset_selection') message = `Hi, ${visitorName}. Which device are you having an issue with?`;
+    if (status === 'awaiting_id_confirmation') message = `Thanks, ${potentialUser.Name}. Is that correct?`;
+    if (status === 'awaiting_barcode_confirmation') message = `I see you're ${potentialUser.Name}. Is that correct?`;
+    if (status === 'processing' || status === 'verifying') message = "One moment...";
+    if (status === 'awaiting_problem') message = `Thanks, ${visitorName}. Please hold the button and describe your issue.`;
+    if (status === 'awaiting_clarification') message = clarificationQuestion || "Let me ask a quick follow-up...";
+    if (status === 'awaiting_confirmation') message = `Please review the details, ${visitorName}. Is this correct?`;
+    if (status === 'error') message = errorMessage || "There was a problem.";
+
+    const showListenButton = ['awaiting_scan', 'awaiting_name', 'awaiting_problem', 'awaiting_clarification'].includes(status);
+    const showScannerBox = status === 'awaiting_scan';
+    const showTicketDetails = status === 'awaiting_confirmation';
+    const showUserConfirmationButtons = status === 'awaiting_id_confirmation' || status === 'awaiting_barcode_confirmation';
+
+    return (
+        <div className="bg-black/60 backdrop-blur-md p-4 sm:p-6 rounded-2xl max-w-xl w-full shadow-2xl border border-gray-500 flex flex-col items-center text-center">
+            <h2 className="text-3xl font-semibold text-cyan-400 mb-4">{message}</h2>
+            {(status === 'processing' || status === 'verifying') && <div className="my-4"><LoadingSpinner /></div>}
+            
+            {showScannerBox && (
+                <div className="relative w-80 h-48 sm:w-96 sm:h-56 my-4">
+                    <div id="scanner-container" ref={scannerContainerRef} className="w-full h-full rounded-lg overflow-hidden bg-gray-900/50"></div>
+                    <div className="absolute inset-0 pointer-events-none">
+                        <div className="absolute top-0 left-0 w-full h-1 bg-cyan-400 shadow-[0_0_15px_2px_theme(colors.cyan.400)] animate-scan"></div>
+                        <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-cyan-400 rounded-tl-lg"></div>
+                        <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-cyan-400 rounded-tr-lg"></div>
+                        <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-cyan-400 rounded-bl-lg"></div>
+                        <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-cyan-400 rounded-br-lg"></div>
+                    </div>
+                </div>
+            )}
+
+            {showListenButton && (
+                <>
+                    {(status === 'awaiting_scan' || status === 'awaiting_name') && <p className="text-lg mt-2 text-gray-300">Or, if you can't scan:</p>}
+                    <HoldToSpeakButton isListening={isListening} onListenStart={onListenStart} onListenStop={onListenStop} interimTranscript={interimTranscript} />
+                </>
+            )}
+            {errorMessage && status !== 'error' && <p className="text-yellow-300 text-center my-4">{errorMessage}</p>}
+            
+            {status === 'awaiting_selection' && (
+                <>
+                    <div className="max-h-64 overflow-y-auto grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 p-2">
+                        {potentialUsers.map(user => (
+                            <button key={user.UserId} onClick={() => onSelectUser(user)} className="bg-cyan-600/50 hover:bg-cyan-500/80 text-white font-bold py-2 px-3 rounded-lg no-select">
+                                <p className="text-base">{user.Name}</p>
+                                <p className="text-xs text-cyan-200">ID: {user.SchoolIdNumber || 'N/A'}</p>
+                            </button>
+                        ))}
+                    </div>
+                    <div className="mt-4"><button onClick={onTryAgain} className="bg-red-600/80 hover:bg-red-500/80 text-white font-bold py-2 px-4 rounded-lg no-select">I'm not here</button></div>
+                </>
+            )}
+
+            {status === 'awaiting_asset_selection' && (
+                <>
+                    <div className="max-h-64 overflow-y-auto grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 p-2">
+                        {userAssets.map(asset => (
+                            <button key={asset.AssetId} onClick={() => onAssetSelect(asset)} className="bg-cyan-600/50 hover:bg-cyan-500/80 text-white font-bold py-3 px-4 rounded-lg text-left no-select">
+                                <p className="text-base">{asset.Name}</p>
+                                <p className="text-xs text-cyan-200">Tag: {asset.AssetTag || 'N/A'}</p>
+                            </button>
+                        ))}
+                        <button onClick={() => onAssetSelect(null)} className="bg-gray-600/50 hover:bg-gray-500/80 text-white font-bold py-3 px-4 rounded-lg no-select">It's something else</button>
+                    </div>
+                </>
+            )}
+
+            {showUserConfirmationButtons && (
+                 <div className="flex justify-center gap-4 pt-4">
+                    <button onClick={() => onConfirmUser(true)} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg no-select">Yes, that's me</button>
+                    <button onClick={() => onConfirmUser(false)} className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-lg no-select">No, that's not me</button>
+                </div>
+            )}
+
+            {showTicketDetails && ticketDetails && iiqUser && (
+                <div className="text-left space-y-3 text-xl mt-4">
+                    <p><strong className="text-cyan-400">Name:</strong> {iiqUser.Name}</p>
+                    <p><strong className="text-cyan-400">Problem:</strong> <span className="text-white">{problemDescription}</span></p>
+                    {identifiedAsset && <p><strong className="text-cyan-400">Device:</strong> <span className="text-purple-300">{identifiedAsset.Name}</span></p>}
+                    <div className="flex justify-center gap-4 pt-4">
+                        <button onClick={onCreateTicket} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg no-select">Yes, Create Ticket</button>
+                        <button onClick={onRedoProblem} className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-lg no-select">No, Let's Try Again</button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ConfirmationDisplay = ({ ticket }) => (
+    <div className="bg-teal-900/80 backdrop-blur-md p-8 rounded-2xl max-w-3xl w-full shadow-2xl border-2 border-cyan-500 text-center">
+        <CheckCircleIcon className="w-20 h-20 mx-auto text-cyan-400" />
+        <h2 className="text-4xl font-bold mt-4">Ticket Created!</h2>
+        <p className="text-lg mt-2">A technician will be with you shortly. This screen will reset automatically.</p>
+        <div className="mt-6 bg-black/40 p-4 rounded-lg text-left text-xl space-y-2">
+            <p><strong>Ticket #:</strong> <span className="font-mono">{ticket.ticketNumber}</span></p>
+            <p><strong>For:</strong> {ticket.visitorName}</p>
+        </div>
+    </div>
+);
+
+
+// --- KIOSK FLOW COMPONENTS ---
+
+const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
+    const [status, setStatus] = useState('initializing');
+    const [isListening, setIsListening] = useState(false);
+    const [interimTranscript, setInterimTranscript] = useState('');
+    const [errorMessage, setErrorMessage] = useState('');
+    const [potentialUser, setPotentialUser] = useState(null);
+    const [potentialUsers, setPotentialUsers] = useState([]);
+
+    const html5QrCodeRef = useRef(null);
+    const scannerContainerRef = useRef(null);
+    
+    const recognitionRef = useRef(null);
+    const finalTranscriptRef = useRef('');
+    const silenceTimeoutRef = useRef(null);
+
+    
+
+    const findUserInIncidentIQ = React.useCallback(async (searchTerm) => {
+        try {
+                        const response = await fetch(`${FIREBASE_FUNCTIONS_URL}/api/findUser`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ searchTerm })
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`Direct call to /api/findUser failed:`, errorText);
+                throw new Error(`API Error: ${response.status}`);
+            }
+            const users = await response.json();
+            return users || [];
+        } catch (searchError) {
+            console.error("Error calling /findUser endpoint:", searchError);
+            return [];
+        }
+    }, []);
+
+    const verifyUserByName = React.useCallback(async (name) => {
+        setStatus('verifying');
+        const users = await findUserInIncidentIQ(name);
+        if (users && users.length > 0) {
+            setErrorMessage('');
+            if (users.length > 1) {
+                setPotentialUsers(users);
+                setStatus('awaiting_selection');
+            } else {
+                setPotentialUser(users[0]);
+                setStatus('awaiting_id_confirmation');
+            }
+        } else {
+            setErrorMessage(`I couldn't find anyone named "${name}". Please try spelling it out.`);
+            setStatus('awaiting_name');
+        }
+    }, [findUserInIncidentIQ, setErrorMessage, setPotentialUsers, setStatus, setPotentialUser]);
+
+    const processTranscript = React.useCallback(async (transcript) => {
+        if (!transcript) return;
+        const cancelWords = ['cancel', 'start over', 'never mind', 'delete'];
+        if (cancelWords.some(word => transcript.toLowerCase().includes(word))) {
+            return onExit();
+        }
+        await verifyUserByName(transcript);
+    }, [onExit, verifyUserByName]);
+    
+    const handleListenStart = (event) => {
+        event.preventDefault();
+        finalTranscriptRef.current = '';
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert("Speech recognition not supported on this browser.");
+            return;
+        }
+        
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => setIsListening(true);
+        recognition.onend = () => setIsListening(false);
+        recognition.onerror = (event) => console.error("Speech error:", event.error);
+        
+        recognition.onresult = (event) => {
+            let final = '';
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) { final += event.results[i][0].transcript; } 
+                else { interim += event.results[i][0].transcript; }
+            }
+            setInterimTranscript(interim);
+            if (final) { finalTranscriptRef.current += final + ' '; }
+        };
+        
+        recognition.start();
+        recognitionRef.current = recognition;
+    };
+
+    const handleListenStop = React.useCallback((event) => {
+        event.preventDefault();
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+        }
+        silenceTimeoutRef.current = setTimeout(() => {
+            if (finalTranscriptRef.current) {
+                processTranscript(finalTranscriptRef.current.trim());
+                finalTranscriptRef.current = '';
+            }
+        }, 2500);
+    }, [processTranscript]);
+    
+    const verifyUserByBarcode = React.useCallback(async (searchTerm) => {
+        if (html5QrCodeRef.current?.isScanning) {
+             html5QrCodeRef.current.pause();
+        }
+        setStatus('verifying');
+        const users = await findUserInIncidentIQ(searchTerm);
+        if (users && users.length > 0) {
+            setErrorMessage('');
+            if (users.length === 1) {
+                setPotentialUser(users[0]);
+                setStatus('awaiting_barcode_confirmation');
+            } else {
+                setPotentialUsers(users);
+                setStatus('awaiting_selection');
+            }
+        } else {
+            setPotentialUser(null);
+            setErrorMessage("I couldn't verify that ID. Please try saying your name.");
+            setStatus('awaiting_name');
+            if(html5QrCodeRef.current) html5QrCodeRef.current.resume();
+        }
+    }, [findUserInIncidentIQ, setErrorMessage, setPotentialUser, setStatus, setPotentialUsers]);
+    
+    const handleConfirmation = React.useCallback((isConfirmed) => {
+        if (isConfirmed) {
+            onUserVerified(potentialUser);
+        } else {
+            setPotentialUser(null);
+            setErrorMessage("My mistake. Let's try again.");
+            setStatus('awaiting_name');
+            if(html5QrCodeRef.current) html5QrCodeRef.current.resume();
+        }
+    }, [onUserVerified, potentialUser]);
+    
+    // This effect transitions the component to the scanning state after the initial render.
+    useEffect(() => {
+        // Set status to awaiting_scan to ensure the scanner container div is rendered.
+        setStatus('awaiting_scan');
+    }, []);
+
+    // This effect manages the scanner lifecycle, starting it only when the UI is ready.
+    useEffect(() => {
+        const startScanner = async () => {
+            // We must have the container element ready in the DOM to initialize the scanner.
+            if (!scannerContainerRef.current) {
+                // This should not happen with this new logic, but it's a good safeguard.
+                console.error("Scanner container ref is not available even when status is 'awaiting_scan'.");
+                setErrorMessage("Could not initialize scanner component.");
+                setStatus('error');
+                return;
+            }
+
+            try {
+                // Ensure we don't create multiple instances
+                if (!html5QrCodeRef.current) {
+                    html5QrCodeRef.current = new Html5Qrcode("scanner-container", {
+                         verbose: false
+                    });
+                }
+
+                if (html5QrCodeRef.current.isScanning) {
+                    return;
+                }
+
+                const config = {
+                    fps: 30,
+                    qrbox: { width: 384, height: 224 },
+                    aspectRatio: 1.7777778,
+                    formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
+                    disableFlip: false,
+                    rememberLastUsedCamera: true,
+                };
+
+                await html5QrCodeRef.current.start(
+                    { facingMode: "user" },
+                    config,
+                    (decodedText) => { 
+                        if (html5QrCodeRef.current) {
+                            verifyUserByBarcode(decodedText); 
+                        }
+                    },
+                    (errorMessage) => { /* Optional: handle non-critical scan errors */ }
+                );
+
+            } catch (err) {
+                console.error("Scanner initialization failed:", err);
+                if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+                    setErrorMessage("Camera access denied. Please enable permissions in your browser settings.");
+                } else {
+                    setErrorMessage("Could not access camera. Please ensure it is not in use by another application.");
+                }
+                setStatus('error');
+            }
+        };
+
+        // Only attempt to start the scanner when the component is in the correct state.
+        if (status === 'awaiting_scan') {
+            startScanner();
+        }
+
+        return () => {
+            // Cleanup: Ensure the scanner is stopped when the component unmounts or status changes.
+            if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+                html5QrCodeRef.current.stop().catch(err => console.error("Error stopping scanner:", err));
+            }
+            html5QrCodeRef.current = null;
+        };
+    }, [status, verifyUserByBarcode, cameraDeviceId]);
+
+
+    return (
+        <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
+             <div className="absolute inset-0 bg-gray-800/50"></div>
+             <button onClick={onExit} className="absolute top-6 right-6 z-20 text-gray-300 hover:text-white"><CloseIcon/></button>
+             <LiveStatusDisplay 
+                status={status}
+                interimTranscript={interimTranscript}
+                isListening={isListening}
+                errorMessage={errorMessage}
+                potentialUser={potentialUser}
+                potentialUsers={potentialUsers}
+                onSelectUser={onUserVerified}
+                onTryAgain={() => { 
+                    setPotentialUsers([]); 
+                    setStatus('awaiting_name');
+                    if(html5QrCodeRef.current) html5QrCodeRef.current.resume();
+                }}
+                onConfirmUser={handleConfirmation}
+                onListenStart={handleListenStart}
+                onListenStop={handleListenStop}
+                scannerContainerRef={scannerContainerRef}
+            />
+        </div>
+    );
+};
+
+
+const CheckInFlow = ({ onExit, cameraDeviceId }) => {
+    const [status, setStatus] = useState('verifying_user');
+    const [visitorName, setVisitorName] = useState('');
+    const [problemDescription, setProblemDescription] = useState('');
+    const [issuePath, setIssuePath] = useState('');
+    const [iiqUser, setIiqUser] = useState(null);
+    const [ticketDetails, setTicketDetails] = useState(null);
+    const [finalTicket, setFinalTicket] = useState(null);
+    const [userAssets, setUserAssets] = useState([]);
+    const [identifiedAsset, setIdentifiedAsset] = useState(null);
+    const [conversationHistory, setConversationHistory] = useState([]);
+    const [clarificationCount, setClarificationCount] = useState(0);
+    const [clarificationQuestion, setClarificationQuestion] = useState('');
+    const [isListening, setIsListening] = useState(false);
+    const [interimTranscript, setInterimTranscript] = useState('');
+    const [errorMessage, setErrorMessage] = useState('');
+    
+    const mediaRecorderRef = useRef(null);
+    const recordedChunksRef = useRef([]);
+    const recognitionRef = useRef(null);
+    const finalTranscriptRef = useRef('');
+    const silenceTimeoutRef = useRef(null);
+    const resetSessionTimeoutRef = useRef(null);
+    const statusRef = useRef(status);
+    useEffect(() => { statusRef.current = status; }, [status]);
+
+    const toProperCase = (str) => {
+        if (!str) return '';
+        return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+    };
+
+    const callProxy = async (url, body) => {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Proxy call to ${url} failed:`, errorText);
+            throw new Error(`API Error: ${response.status}`);
+        }
+        const text = await response.text();
+        return text ? JSON.parse(text) : {};
+    };
+
+    const blobToBase64 = (blob) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = (error) => reject(error);
+        });
+    };
+
+    const uploadToGoogleDrive = async (audioBlob, ticketNumber) => {
+        if (!audioBlob || audioBlob.size === 0 || !iiqUser) return null;
+        const date = new Date().toISOString().split('T')[0];
+        const location = iiqUser.Location?.Name.replace(/ /g, '-') || 'Unknown-Location';
+        const schoolId = iiqUser.SchoolIdNumber || 'Unknown-ID';
+        const fileName = `${date}_${location}_${schoolId}_AUDIO.webm`;
+        const metadata = { userName: iiqUser.Name, userId: iiqUser.UserId, schoolId: iiqUser.SchoolIdNumber, userLocation: iiqUser.Location?.Name, ticketNumber };
+        
+        try {
+            const base64Data = await blobToBase64(audioBlob);
+            const response = await fetch(VIDEO_UPLOAD_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fileName, fileData: base64Data, metadata }),
+            });
+            if (!response.ok) throw new Error(`Upload failed with status ${response.status}`);
+            const result = await response.json();
+            return result.link;
+        } catch (error) {
+            console.error("Failed to upload audio to Google Drive:", error);
+            return `Upload failed: ${error.message}`;
+        }
+    };
+    
+    const resetSession = () => {
+        if (resetSessionTimeoutRef.current) clearTimeout(resetSessionTimeoutRef.current);
+        onExit();
+    };
+
+    const handleUserVerified = async (user) => {
+        setIiqUser(user);
+        const firstName = toProperCase(user.Name.split(' ')[0]);
+        setVisitorName(firstName);
+        
+        setStatus('processing');
+        const assets = await getUserAssets(user.UserId);
+        if (assets && assets.length > 0) {
+            setUserAssets(assets);
+            setStatus('awaiting_asset_selection');
+        } else {
+            setStatus('awaiting_problem');
+        }
+    };
+
+    const processTranscript = async (transcript) => {
+        if (!transcript) return;
+        const cancelWords = ['cancel', 'start over', 'never mind', 'delete'];
+        if (cancelWords.some(word => transcript.toLowerCase().includes(word))) {
+            return resetSession();
+        }
+        
+        const currentStatus = statusRef.current;
+        if (currentStatus === 'awaiting_problem') {
+            await startClarificationProcess(transcript);
+        } else if (currentStatus === 'awaiting_clarification') {
+            const newCount = clarificationCount + 1;
+            setClarificationCount(newCount);
+            const updatedHistory = [...conversationHistory, { role: 'user', parts: [{ text: transcript }] }];
+            setConversationHistory(updatedHistory);
+            const result = await getProblemSolvingResponse(updatedHistory, identifiedAsset, newCount, visitorName);
+            handleClarificationResponse(result, updatedHistory);
+        }
+    };
+    
+    const handleListenStart = (event) => {
+        event.preventDefault();
+        finalTranscriptRef.current = '';
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert("Speech recognition not supported on this browser.");
+            return;
+        }
+        
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => setIsListening(true);
+        recognition.onend = () => setIsListening(false);
+        recognition.onerror = (event) => console.error("Speech error:", event.error);
+        
+        recognition.onresult = (event) => {
+            let final = '';
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) { final += event.results[i][0].transcript; } 
+                else { interim += event.results[i][0].transcript; }
+            }
+            setInterimTranscript(interim);
+            if (final) { finalTranscriptRef.current += final + ' '; }
+        };
+        
+        recognition.start();
+        recognitionRef.current = recognition;
+    };
+
+    const handleListenStop = (event) => {
+        event.preventDefault();
+        if (mediaRecorderRef.current?.state === 'recording') {
+            mediaRecorderRef.current.pause();
+        }
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+        }
+        silenceTimeoutRef.current = setTimeout(() => {
+            if (finalTranscriptRef.current) {
+                processTranscript(finalTranscriptRef.current.trim());
+                finalTranscriptRef.current = '';
+            }
+        }, 2500);
+    };
+    
+    const getUserAssets = async (UserId) => {
+        try {
+            const data = await callProxy(INCIDENTIQ_PROXY_URL, { path: '/api/v1.0/assets', method: 'POST', body: { "Filters": [{ "Facet": "User", "Id": UserId }] } });
+            return data.Items || [];
+        } catch (error) {
+            console.error("CheckInFlow: Error fetching user assets:", error);
+            return null;
+        }
+    };
+
+    const handleAssetSelection = (asset) => { setIdentifiedAsset(asset); setStatus('awaiting_problem'); };
+    const handleRedoProblem = () => { setProblemDescription(''); setTicketDetails(null); setConversationHistory([]); setClarificationCount(0); setStatus('awaiting_problem'); };
+
+    async function createIncidentIQTicket(ticketData) {
+        try {
+            const responseData = await callProxy(INCIDENTIQ_PROXY_URL, {
+                path: '/api/v1.0/tickets/new',
+                method: 'POST',
+                body: ticketData
+            });
+            // The ticket ID is at the top level of the response, while the details are in `Item`.
+            if (responseData?.Id == null) {
+                 throw new Error("Ticket creation failed to return a valid ID.");
+            }
+            return {
+                success: true,
+                ticketId: responseData.Id, // Use top-level Id
+                ticketNumber: responseData.Item?.TicketNumber,
+                title: responseData.Item?.Subject,
+                visitorName: responseData.Item?.For?.Name,
+            };
+        } catch (error) {
+            console.error("Error in createIncidentIQTicket:", error);
+            return { success: false, errorMessage: error.message };
+        }
+    }
+
+    
+
+    async function logTicketToFirestore(ticket) {
+        const db = getFirestore();
+        if (!db || !iiqUser) return;
+        try {
+            const { Subject, IssueDescription, ForId, LocationId, TicketId, ticketNumber, videoLink } = ticket;
+            await addDoc(collection(db, "tickets"), {
+                createdAt: new Date().toISOString(),
+                status: "Open",
+                requestorName: iiqUser.Name,
+                schoolId: iiqUser.SchoolIdNumber,
+                userLocation: iiqUser.Location?.Name,
+                userId: ForId,
+                locationId: LocationId,
+                device: identifiedAsset ? identifiedAsset.Name : 'N/A',
+                assetTag: identifiedAsset ? identifiedAsset.AssetTag : 'N/A',
+                problemDescription: IssueDescription,
+                videoLink: videoLink || '#',
+                incidentIqTicketId: TicketId,
+                incidentIqTicketNumber: ticketNumber,
+                subject: Subject,
+            });
+        } catch (e) { console.error("Firestore log error: ", e); }
+    }
+
+    const startClarificationProcess = async (initialProblem) => {
+        setStatus('processing');
+        const initialHistory = [{ role: 'user', parts: [{ text: initialProblem }] }];
+        setConversationHistory(initialHistory);
+        setClarificationCount(0);
+        const result = await getProblemSolvingResponse(initialHistory, identifiedAsset, 0, visitorName);
+        handleClarificationResponse(result, initialHistory);
+    };
+
+    const getProblemSolvingResponse = async (history, asset, count, userName) => {
+        const assetInfo = asset ? `The user is having a problem with their ${asset.Name} (Model: ${asset.Model?.Name || 'N/A'}).` : "The user has not specified a device.";
+        const prompt = `You are an expert IT support technician helping a user named ${userName}. Your goal is to gather information to create a useful support ticket. **CONTEXT:** - User: ${userName} - Device: ${assetInfo} - Conversation History:   ${history.map(h => `${h.role === 'user' ? userName : 'Assistant'}: ${h.parts[0].text}`).join('\n')} - Questions Asked So Far: ${count} **YOUR TASK (Follow these steps in order):** 1.  **Analyze Completeness:** Review the entire conversation history. Do you have a specific, actionable problem description? "It's broken" is not enough. "The screen is cracked" is enough. 2.  **Decision:** - **IF** the information is complete **OR** if you have already asked 2 questions (the "Questions Asked so far" is 2), you MUST proceed to Step 4 (Summarize).     - **ELSE** (the information is vague and you have asked fewer than 2 questions), proceed to Step 3 (Ask). 3.  **Ask:** Formulate ONE clarifying question. Do not repeat previous questions. The goal is to get a more specific detail. 4.  **Summarize:** Write a concise, one-paragraph summary of the issue based on ALL information gathered. **RESPONSE FORMAT:** You MUST respond with a valid JSON object. - If you decided to ask a question in Step 3, use this format:   {"status": "needs_clarification", "content": "Your question here."}  - If you decided to summarize in Step 4, use this format:   {"status": "complete", "content": "Your summary paragraph here.", "issuePath": "[Categorized Issue Path, e.g., Hardware > Screen Damage]"}`;
+        const payload = {
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: {
+                responseMimeType: "application/json",
+            }
+        };
+        try {
+            const result = await callProxy(GEMINI_PROXY_URL, { body: payload });
+            const jsonText = result.candidates[0].content.parts[0].text;
+            return JSON.parse(jsonText);
+        } catch (error) {
+            console.error("Clarification/Summarization AI error:", error);
+            const lastUserMessage = history.filter(h => h.role === 'user').pop()?.parts[0]?.text || "Problem description could not be processed.";
+            return { status: 'complete', content: lastUserMessage };
+        }
+    }
+
+    const handleClarificationResponse = (result, history) => {
+        if (result.status === 'needs_clarification') {
+            setClarificationQuestion(result.content);
+            setConversationHistory([...history, { role: 'model', parts: [{ text: result.content }] }]);
+            setStatus('awaiting_clarification');
+        } else { // status is 'complete'
+            setProblemDescription(result.content);
+            if (result.issuePath) {
+                setIssuePath(result.issuePath);
+            }
+        }
+    };
+    
+    const prepareTicket = React.useCallback(() => {
+        if (!iiqUser || !problemDescription) return;
+        setStatus('processing');
+        
+        const locationName = iiqUser.Location?.Name || 'Unknown Location';
+        let subject = '';
+        if (identifiedAsset && issuePath) {
+            subject = `${identifiedAsset.Name} > ${issuePath}`;
+        } else if (issuePath) {
+            subject = issuePath;
+        } else {
+            subject = identifiedAsset 
+                ? `${identifiedAsset.Name} - ${locationName}`
+                : `Walk Up Support - ${locationName}`;
+        }
+
+        const details = {
+            Subject: subject,
+            IssueDescription: problemDescription,
+            ForId: iiqUser.UserId,
+            LocationId: iiqUser.LocationId,
+            Assets: identifiedAsset ? [{ AssetId: identifiedAsset.AssetId }] : [],
+            Tags: [{ Name: "Walk Up" }],
+        };
+        setTicketDetails(details);
+        setStatus('awaiting_confirmation');
+    }, [iiqUser, problemDescription, identifiedAsset, issuePath]);
+
+    useEffect(() => {
+        if (problemDescription && iiqUser && !ticketDetails) {
+            prepareTicket();
+        }
+    }, [problemDescription, iiqUser, ticketDetails, prepareTicket]);
+
+    const createTicket = async () => {
+        if (!ticketDetails || !iiqUser) return;
+        setStatus('processing');
+        try {
+            const videoLink = await stopRecording(); // No ticketNumber yet
+
+            const ticketDetailsWithVideo = {
+                ...ticketDetails,
+                IssueDescription: `${ticketDetails.IssueDescription}\n\nAudio Submission: ${videoLink || 'Not available.'}`
+            };
+
+            const newTicket = await createIncidentIQTicket(ticketDetailsWithVideo);
+            if (!newTicket.success) {
+                setErrorMessage(newTicket.errorMessage || "Failed to create ticket in Incident IQ.");
+                setStatus('error');
+                setTimeout(resetSession, 10000);
+                return;
+            }
+
+            await logTicketToFirestore({ ...ticketDetailsWithVideo, TicketId: newTicket.ticketId, ticketNumber: newTicket.ticketNumber, videoLink: videoLink || '#' });
+            setFinalTicket(newTicket);
+            setStatus('confirming');
+            if (resetSessionTimeoutRef.current) clearTimeout(resetSessionTimeoutRef.current);
+            resetSessionTimeoutRef.current = setTimeout(resetSession, 10000);
+
+        } catch (error) {
+            console.error("A critical error occurred during the ticket process.", error)
+            setErrorMessage("A critical error occurred. Please try again.");
+            setStatus('error');
+            setTimeout(resetSession, 10000);
+        }
+    };
+
+    const startRecording = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+            recordedChunksRef.current = [];
+            mediaRecorderRef.current.start();
+            mediaRecorderRef.current.pause();
+        }
+    };
+
+    const stopRecording = (ticketNumber) => {
+        return new Promise((resolve) => {
+            if (mediaRecorderRef.current && (mediaRecorderRef.current.state === 'recording' || mediaRecorderRef.current.state === 'paused')) {
+                mediaRecorderRef.current.onstop = async () => {
+                    const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+                    const audioLink = await uploadToGoogleDrive(audioBlob, ticketNumber);
+                    recordedChunksRef.current = [];
+                    resolve(audioLink);
+                };
+                mediaRecorderRef.current.stop();
+            } else {
+                resolve(null);
+            }
+        });
+    };
+    
+    useEffect(() => {
+        const initializeMedia = async () => {
+            try {
+                const constraints = { 
+                    video: false, 
+                    audio: { 
+                        noiseSuppression: true, 
+                        echoCancellation: true 
+                    } 
+                };
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                
+                mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                mediaRecorderRef.current.ondataavailable = (event) => {
+                    if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+                };
+                startRecording();
+            } catch (err) {
+                console.error("Media initialization failed in CheckInFlow:", err);
+                setErrorMessage(err.message);
+                setStatus('error');
+            }
+        };
+        initializeMedia();
+        
+        return () => {
+            if (recognitionRef.current) {
+                recognitionRef.current.stop();
+                recognitionRef.current = null;
+            }
+        };
+    }, []);
+
+    if (status === 'verifying_user') {
+        return <UserVerification onUserVerified={handleUserVerified} onExit={onExit} cameraDeviceId={cameraDeviceId} />;
+    }
+
+    if (status === 'confirming' && finalTicket) {
+        return (
+            <div className="relative w-full h-full flex items-center justify-center p-4">
+                <ConfirmationDisplay ticket={finalTicket} />
+            </div>
+        );
+    }
+
+    return (
+        <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
+            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent"></div>
+            <button onClick={resetSession} className="absolute top-6 right-6 z-20 text-gray-300 hover:text-white"><CloseIcon/></button>
+            <LiveStatusDisplay 
+                status={status}
+                interimTranscript={interimTranscript}
+                visitorName={visitorName}
+                iiqUser={iiqUser}
+                problemDescription={problemDescription}
+                identifiedAsset={identifiedAsset}
+                isListening={isListening}
+                errorMessage={errorMessage}
+                userAssets={userAssets}
+                onAssetSelect={handleAssetSelection}
+                onCreateTicket={createTicket}
+                onRedoProblem={handleRedoProblem}
+                onListenStart={handleListenStart}
+                onListenStop={handleListenStop}
+                ticketDetails={ticketDetails}
+                clarificationQuestion={clarificationQuestion}
+            />
+        </div>
+    );
+};
+
+
+const LeaveMessageFlow = ({ onExit, cameraDeviceId }) => {
+    const [status, setStatus] = useState('verifying_user');
+    const [isListening, setIsListening] = useState(false);
+    const [interimTranscript, setInterimTranscript] = useState('');
+    const [errorMessage, setErrorMessage] = useState('');
+    const [iiqUser, setIiqUser] = useState(null);
+    const [messageSummary, setMessageSummary] = useState('');
+    
+    const recognitionRef = useRef(null);
+    const finalTranscriptRef = useRef('');
+    const silenceTimeoutRef = useRef(null);
+    const mediaRecorderRef = useRef(null);
+    const recordedChunksRef = useRef([]);
+
+    const resetSession = () => onExit();
+    
+    const callProxy = async (url, body) => {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (!response.ok) { throw new Error(`API Error: ${response.status}`); }
+        const text = await response.text();
+        return text ? JSON.parse(text) : {};
+    };
+    
+    const blobToBase64 = (blob) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = (error) => reject(error);
+        });
+    };
+
+    const uploadToGoogleDrive = async (audioBlob) => {
+        if (!audioBlob || audioBlob.size === 0 || !iiqUser) return null;
+        const date = new Date().toISOString().split('T')[0];
+        const location = iiqUser.Location?.Name.replace(/ /g, '-') || 'Unknown-Location';
+        const schoolId = iiqUser.SchoolIdNumber || 'Unknown-ID';
+        const fileName = `${date}_Message_${location}_${schoolId}_AUDIO.webm`;
+        const metadata = { userName: iiqUser.Name, userId: iiqUser.UserId, schoolId: iiqUser.SchoolIdNumber, userLocation: iiqUser.Location?.Name, type: 'message' };
+        
+        try {
+            const base64Data = await blobToBase64(audioBlob);
+            const response = await fetch(VIDEO_UPLOAD_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fileName, fileData: base64Data, metadata }),
+            });
+            if (!response.ok) throw new Error(`Upload failed with status ${response.status}`);
+            const result = await response.json();
+            return result.link;
+        } catch (error) {
+            console.error("Failed to upload audio to Google Drive:", error);
+            return `Upload failed: ${error.message}`;
+        }
+    };
+    
+    const handleListenStart = (event, processFunc) => {
+        event.preventDefault();
+        finalTranscriptRef.current = '';
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert("Speech recognition not supported on this browser.");
+            return;
+        }
+        
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => setIsListening(true);
+        recognition.onend = () => setIsListening(false);
+        recognition.onerror = (event) => console.error("Speech error:", event.error);
+        
+        recognition.onresult = (event) => {
+            let final = '';
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) { final += event.results[i][0].transcript; } 
+                else { interim += event.results[i][0].transcript; }
+            }
+            setInterimTranscript(interim);
+            if (final) { finalTranscriptRef.current += final + ' '; }
+        };
+        
+        recognition.start();
+        recognitionRef.current = recognition;
+    };
+
+    const handleListenStop = (event, processFunc) => {
+        event.preventDefault();
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+        }
+        silenceTimeoutRef.current = setTimeout(() => {
+            if (finalTranscriptRef.current) {
+                processFunc(finalTranscriptRef.current.trim());
+                finalTranscriptRef.current = '';
+            }
+        }, 2500);
+    };
+
+    useEffect(() => {
+        const initialize = async () => {
+             try {
+                const constraints = { 
+                    video: false, 
+                    audio: true 
+                };
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                mediaRecorderRef.current.ondataavailable = (event) => {
+                    if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+                };
+            } catch (err) {
+                console.error("Media initialization failed in LeaveMessageFlow:", err);
+                setErrorMessage(err.message);
+                setStatus('error');
+            }
+        };
+        initialize();
+        return () => {
+            if (recognitionRef.current) {
+                recognitionRef.current.stop();
+                recognitionRef.current = null;
+            }
+        };
+    }, []);
+    
+    const handleSaveMessage = async () => {
+        setStatus('saving');
+        const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+        const audioLink = await uploadToGoogleDrive(audioBlob);
+        
+        const db = getFirestore();
+        await addDoc(collection(db, "messages"), {
+            createdAt: new Date().toISOString(),
+            userName: iiqUser.Name,
+            userLocation: iiqUser.Location?.Name,
+            schoolId: iiqUser.SchoolIdNumber,
+            summary: messageSummary,
+            videoLink: audioLink || "#"
+        });
+        setStatus('done');
+        setTimeout(resetSession, 8000);
+    };
+
+    const generateSummary = async (transcript) => {
+        setStatus('processing_summary');
+        const prompt = `Summarize this user's message into one paragraph: "${transcript}"`;
+        const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }]};
+        try {
+            const result = await callProxy(GEMINI_PROXY_URL, { body: payload });
+            const summary = result.candidates[0].content.parts[0].text;
+            setMessageSummary(summary);
+            setStatus('awaiting_summary_confirmation');
+        } catch (e) {
+            setMessageSummary(transcript); // Fallback to raw transcript
+            setStatus('awaiting_summary_confirmation');
+        }
+    };
+
+    if (status === 'verifying_user') {
+        return <UserVerification onUserVerified={(user) => { setIiqUser(user); setStatus('awaiting_message'); }} onExit={onExit} cameraDeviceId={cameraDeviceId} />;
+    }
+
+    return (
+         <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
+            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent"></div>
+            <button onClick={resetSession} className="absolute top-6 right-6 z-20 text-gray-300 hover:text-white"><CloseIcon/></button>
+            <div className="relative z-10 bg-black/60 backdrop-blur-md p-6 rounded-2xl max-w-3xl w-full shadow-2xl border border-gray-500 flex flex-col items-center text-center">
+                 {status === 'awaiting_message' && (
+                    <>
+                        <h2 className="text-3xl font-semibold text-cyan-400 mb-4">Ready to record, {iiqUser?.Name.split(' ')[0]}.</h2>
+                        <HoldToSpeakButton 
+                            isListening={isListening} 
+                            onListenStart={(e) => {
+                                recordedChunksRef.current = [];
+                                mediaRecorderRef.current.start();
+                                handleListenStart(e);
+                            }} 
+                            onListenStop={(e) => {
+                                if(mediaRecorderRef.current.state === 'recording') {
+                                    mediaRecorderRef.current.stop();
+                                }
+                                handleListenStop(e, generateSummary);
+                            }} 
+                            interimTranscript={interimTranscript} 
+                        />
+                    </>
+                 )}
+                {status === 'processing_summary' && <> <h2 className="text-3xl font-semibold text-cyan-400 mb-4">Generating summary...</h2> <LoadingSpinner/> </>
+                }
+                {status === 'awaiting_summary_confirmation' && (
+                    <>
+                        <h2 className="text-3xl font-semibold text-cyan-400 mb-4">Is this summary correct?</h2>
+                        <p className="text-xl bg-gray-900/50 p-4 rounded-lg my-4">{messageSummary}</p>
+                        <div className="flex justify-center gap-4 pt-4">
+                            <button onClick={handleSaveMessage} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg no-select">Yes, Send</button>
+                            <button onClick={() => setStatus('awaiting_message')} className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-lg no-select">No, Record Again</button>
+                        </div>
+                    </>
+                )}
+                {status === 'saving' && <> <h2 className="text-3xl font-semibold text-cyan-400 mb-4">Sending your message...</h2> <LoadingSpinner/> </>
+                }
+                {status === 'done' && (
+                     <div className="w-full">
+                        <CheckCircleIcon className="w-20 h-20 mx-auto text-cyan-400" />
+                        <h2 className="text-4xl font-bold mt-4">Message Sent!</h2>
+                        <p className="text-lg mt-2">Your site tech has been notified. This screen will reset.</p>
+                    </div>
+                )}
+                {status === 'error' && <p className="text-2xl text-yellow-300">{errorMessage || "Could not access camera/microphone."}</p>}
+            </div>
+        </div>
+    );
+};
+
+// --- ADMIN & LEADERSHIP DASHBOARD COMPONENTS ---
+
+const AdminDashboard = ({ db, setView, userInfo }) => {
+    const [tickets, setTickets] = useState([]);
+    const [messages, setMessages] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [selectedTickets, setSelectedTickets] = useState(new Set());
+    const [filter, setFilter] = useState('');
+    const [sortConfig, setSortConfig] = useState({ key: 'createdAt', direction: 'descending' });
+    const [isCloseModalOpen, setCloseModalOpen] = useState(false);
+    const [isHistoryModalOpen, setHistoryModalOpen] = useState(false);
+    const [currentUserForHistory, setCurrentUserForHistory] = useState(null);
+    const [ticketToClose, setTicketToClose] = useState(null);
+    const [resolutionNotes, setResolutionNotes] = useState('');
+    const [adminView, setAdminView] = useState('tickets');
+
+    useEffect(() => {
+        if (!db) return;
+        const ticketsQuery = query(collection(db, "tickets"), where("status", "==", "Open"));
+        const unsubTickets = onSnapshot(ticketsQuery, (querySnapshot) => {
+            const ticketsData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setTickets(ticketsData);
+            setLoading(false);
+        });
+
+        const messagesQuery = query(collection(db, "messages"));
+        const unsubMessages = onSnapshot(messagesQuery, (querySnapshot) => {
+            const messagesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setMessages(messagesData);
+        });
+
+        return () => {
+            unsubTickets();
+            unsubMessages();
+        };
+    }, [db]);
+
+    const filteredAndSortedData = useMemo(() => {
+        const data = adminView === 'tickets' ? tickets : messages;
+        return data.filter(item =>
+            Object.values(item).some(val => String(val).toLowerCase().includes(filter.toLowerCase()))
+        ).sort((a, b) => {
+            if (!sortConfig.key) return 0;
+            const valA = a[sortConfig.key] || '';
+            const valB = b[sortConfig.key] || '';
+            if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
+            if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
+            return 0;
+        });
+    }, [adminView, tickets, messages, filter, sortConfig]);
+
+
+    const handleSelectAll = (e) => {
+        if (e.target.checked) {
+            setSelectedTickets(new Set(filteredAndSortedData.map(t => t.id)));
+        } else {
+            setSelectedTickets(new Set());
+        }
+    };
+    const handleSelectTicket = (id) => {
+        const newSelection = new Set(selectedTickets);
+        newSelection.has(id) ? newSelection.delete(id) : newSelection.add(id);
+        setSelectedTickets(newSelection);
+    };
+    const handleSort = (key) => {
+        const direction = (sortConfig.key === key && sortConfig.direction === 'ascending') ? 'descending' : 'ascending';
+        setSortConfig({ key, direction });
+    };
+    const openCloseModal = (ticket) => {
+        setTicketToClose(ticket);
+        setCloseModalOpen(true);
+    };
+    const openHistoryModal = (schoolId) => {
+        setCurrentUserForHistory(schoolId);
+        setHistoryModalOpen(true);
+    };
+    const handleSingleClose = async () => {
+        if (!ticketToClose) return;
+        const ticketRef = doc(db, "tickets", ticketToClose.id);
+        await updateDoc(ticketRef, {
+            status: "Closed",
+            closedAt: new Date().toISOString(),
+            resolutionNotes: resolutionNotes
+        });
+        setCloseModalOpen(false);
+        setResolutionNotes('');
+        setTicketToClose(null);
+    };
+    const handleBulkClose = async () => {
+        if (selectedTickets.size === 0 || !window.confirm(`Are you sure you want to close ${selectedTickets.size} tickets?`)) return;
+        const batch = writeBatch(db);
+        selectedTickets.forEach(ticketId => {
+            const ticketRef = doc(db, "tickets", ticketId);
+            batch.update(ticketRef, { status: "Closed", closedAt: new Date().toISOString(), resolutionNotes: "Bulk Closed." });
+        });
+        await batch.commit();
+        setSelectedTickets(new Set());
+    };
+    const SortableHeader = ({ field, label }) => (
+        <th className="p-3 cursor-pointer" onClick={() => handleSort(field)}>
+            <div className="flex items-center gap-1">
+                {label}
+                {sortConfig.key === field && (sortConfig.direction === 'ascending' ? <ChevronUpIcon /> : <ChevronDownIcon />)}
+            </div>
+        </th>
+    );
+    return (
+        <div className="p-8">
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-3xl font-bold">Technician Dashboard</h2>
+                {userInfo?.role === 'leadership' && (
+                    <button onClick={() => setView('leadership')} className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-md font-semibold">
+                        Back to Leadership View
+                    </button>
+                )}
+            </div>
+            <div className="flex gap-2 mb-4">
+                <button onClick={() => setAdminView('tickets')} className={`px-4 py-2 rounded-md font-semibold ${adminView === 'tickets' ? 'bg-cyan-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                    Open Tickets ({tickets.length})
+                </button>
+                <button onClick={() => setAdminView('messages')} className={`px-4 py-2 rounded-md font-semibold ${adminView === 'messages' ? 'bg-cyan-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
+                    Messages ({messages.length})
+                </button>
+            </div>
+            <div className="flex justify-between items-center mb-4">
+                <input type="text" placeholder={`Filter ${adminView}...`} className="bg-gray-700 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-400" value={filter} onChange={(e) => setFilter(e.target.value)} />
+                {selectedTickets.size > 0 && adminView === 'tickets' && (
+                    <button onClick={handleBulkClose} className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded-md font-semibold">
+                        Close {selectedTickets.size} Selected Tickets
+                    </button>
+                )}
+            </div>
+            <div className="bg-gray-900/50 rounded-lg overflow-x-auto">
+                {adminView === 'tickets' ? (
+                    <table className="w-full text-left">
+                        <thead className="bg-gray-700/50">
+                            <tr>
+                                <th className="p-3"><input type="checkbox" onChange={handleSelectAll} checked={selectedTickets.size > 0 && selectedTickets.size === filteredAndSortedData.length} /></th>
+                                <SortableHeader field="createdAt" label="Time" />
+                                <SortableHeader field="requestorName" label="Requestor" />
+                                <SortableHeader field="schoolId" label="School ID" />
+                                <th className="p-3">Device</th>
+                                <th className="p-3">Problem</th>
+                                <th className="p-3">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {loading ? (
+                                <tr><td colSpan="7" className="text-center p-4">Loading tickets...</td></tr>
+                            ) : filteredAndSortedData.map(ticket => (
+                                <tr key={ticket.id} className="border-b border-gray-700 hover:bg-gray-800/50">
+                                    <td className="p-3"><input type="checkbox" checked={selectedTickets.has(ticket.id)} onChange={() => handleSelectTicket(ticket.id)} /></td>
+                                    <td className="p-3">{new Date(ticket.createdAt).toLocaleTimeString()}</td>
+                                    <td className="p-3">{ticket.requestorName || 'N/A'}</td>
+                                    <td className="p-3">
+                                        <div className="flex items-center gap-2">
+                                            {ticket.schoolId || 'N/A'}
+                                            <button onClick={() => openHistoryModal(ticket.schoolId)} title="View User History"><UserHistoryIcon /></button>
+                                        </div>
+                                    </td>
+                                    <td className="p-3">{ticket.device || 'N/A'}</td>
+                                    <td className="p-3 truncate max-w-xs">{ticket.problemDescription || 'N/A'}</td>
+                                    <td className="p-3">
+                                        <div className="flex gap-4">
+                                            <a href={ticket.videoLink || '#'} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">Recording</a>
+                                            <button onClick={() => openCloseModal(ticket)} className="text-green-400 hover:underline">Close</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                            {filteredAndSortedData.length === 0 && !loading && (
+                                <tr><td colSpan="7" className="text-center p-4">No open tickets found.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                 ) : (
+                    <table className="w-full text-left">
+                        <thead className="bg-gray-700/50">
+                            <tr>
+                                <SortableHeader field="createdAt" label="Time" />
+                                <SortableHeader field="userName" label="From" />
+                                <SortableHeader field="userLocation" label="Location" />
+                                <th className="p-3">Summary</th>
+                                <th className="p-3">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                             {loading ? (
+                                <tr><td colSpan="5" className="text-center p-4"><LoadingSpinner /></td></tr>
+                            ) : filteredAndSortedData.map(msg => (
+                                <tr key={msg.id} className="border-b border-gray-700 hover:bg-gray-800/50">
+                                    <td className="p-3">{new Date(msg.createdAt).toLocaleString()}</td>
+                                    <td className="p-3">{msg.userName}</td>
+                                    <td className="p-3">{msg.userLocation}</td>
+                                    <td className="p-3 truncate max-w-md">{msg.summary}</td>
+                                    <td className="p-3">
+                                        <a href={msg.videoLink || '#'} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">Watch Recording</a>
+                                    </td>
+                                </tr>
+                            ))}
+                            {filteredAndSortedData.length === 0 && !loading && (
+                                <tr><td colSpan="5" className="text-center p-4">No messages found.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+            {isCloseModalOpen && <CloseTicketModal ticket={ticketToClose} notes={resolutionNotes} setNotes={setResolutionNotes} onConfirm={handleSingleClose} onCancel={() => setCloseModalOpen(false)} />}
+            {isHistoryModalOpen && <UserHistoryModal db={db} schoolId={currentUserForHistory} onCancel={() => setHistoryModalOpen(false)} />}
+        </div>
+    );
+};
+
+const CloseTicketModal = ({ ticket, notes, setNotes, onConfirm, onCancel }) => (
+    <div className="fixed inset-0 bg-black/60 flex justify-center items-center z-50">
+        <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-2xl font-bold mb-4">Close Ticket for {ticket.requestorName}</h3>
+            <p className="mb-2"><strong className="text-gray-400">Problem:</strong> {ticket.problemDescription}</p>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Add optional resolution notes..." className="w-full bg-gray-700 p-2 rounded-md h-32 mb-4 focus:outline-none focus:ring-2 focus:ring-cyan-400" />
+            <div className="flex justify-end gap-4">
+                <button onClick={onCancel} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded-md">Cancel</button>
+                <button onClick={onConfirm} className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-md font-semibold">Confirm Close</button>
+            </div>
+        </div>
+    </div>
+);
+
+const UserHistoryModal = ({ db, schoolId, onCancel }) => {
+    const [history, setHistory] = useState([]);
+    const [loading, setLoading] = useState(true);
+    useEffect(() => {
+        if (!db || !schoolId) return;
+        async function fetchHistory() {
+            setLoading(true);
+            const q = query(collection(db, "tickets"), where("schoolId", "==", schoolId));
+            const querySnapshot = await getDocs(q);
+            const tickets = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setHistory(tickets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+            setLoading(false);
+        }
+        fetchHistory();
+    }, [db, schoolId]);
+    return (
+        <div className="fixed inset-0 bg-black/60 flex justify-center items-center z-50">
+            <div className="bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[80vh] flex flex-col">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-2xl font-bold">Ticket History for ID: {schoolId}</h3>
+                    <button onClick={onCancel}><CloseIcon /></button>
+                </div>
+                <div className="overflow-y-auto">
+                    {loading ? <LoadingSpinner /> : (
+                        <div className="space-y-4">
+                            {history.length > 0 ? history.map(ticket => (
+                                <div key={ticket.id} className="bg-gray-900/50 p-3 rounded-md">
+                                    <p><strong>Date:</strong> {new Date(ticket.createdAt).toLocaleDateString()}</p>
+                                    <p><strong>Status:</strong> <span className={ticket.status === 'Open' ? 'text-yellow-400' : 'text-green-400'}>{ticket.status}</span></p>
+                                    <p><strong>Problem:</strong> {ticket.problemDescription}</p>
+                                    {ticket.status === 'Closed' && <p className="text-sm text-gray-400 mt-1"><strong>Notes:</strong> {ticket.resolutionNotes || 'N/A'}</p>}
+                                </div>
+                            )) : <p>No ticket history found for this user.</p>}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const LeadershipDashboard = ({ db, auth, setView }) => {
+    const [activeTab, setActiveTab] = useState('activity');
+    return (
+        <div className="p-8">
+            <div className="flex justify-between items-center">
+                <h2 className="text-3xl font-bold mb-6">Leadership Dashboard</h2>
+                <div className="flex gap-2">
+                    <button onClick={() => setView('admin')} className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 font-semibold">
+                        Switch to Technician View
+                    </button>
+                    <button onClick={() => setActiveTab('activity')} className={`px-4 py-2 rounded-md ${activeTab === 'activity' ? 'bg-purple-600' : 'bg-gray-700'}`}>All Activity</button>
+                    <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-md ${activeTab === 'users' ? 'bg-purple-600' : 'bg-gray-700'}`}>Manage Users</button>
+                    <button onClick={() => setActiveTab('locations')} className={`px-4 py-2 rounded-md ${activeTab === 'locations' ? 'bg-purple-600' : 'bg-gray-700'}`}>Tech Assignments</button>
+                </div>
+            </div>
+            <div className="mt-6">
+                {activeTab === 'activity' && <AllActivityView db={db} />}
+                {activeTab === 'users' && <UserManagementPanel db={db} auth={auth} />}
+                {activeTab === 'locations' && <LocationManagementPanel db={db} />}
+            </div>
+        </div>
+    );
+};
+
+const AllActivityView = ({ db }) => {
+    const [allTickets, setAllTickets] = useState([]);
+    const [allMessages, setAllMessages] = useState([]);
+    const [locations, setLocations] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [filter, setFilter] = useState('');
+    const [locationFilter, setLocationFilter] = useState('');
+    const [sortConfig, setSortConfig] = useState({ key: 'createdAt', direction: 'descending' });
+
+    useEffect(() => {
+        if (!db) return;
+        setLoading(true);
+        const unsubTickets = onSnapshot(collection(db, "tickets"), (snapshot) => {
+            setAllTickets(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, type: 'Ticket' })));
+        });
+        const unsubMessages = onSnapshot(collection(db, "messages"), (snapshot) => {
+            setAllMessages(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id, type: 'Message' })));
+        });
+        const unsubLocations = onSnapshot(collection(db, "locations"), (snapshot) => {
+            setLocations(snapshot.docs.map(doc => doc.data().name).sort());
+        });
+
+        Promise.all([unsubTickets, unsubMessages, unsubLocations]).finally(() => setLoading(false));
+
+        return () => {
+            unsubTickets();
+            unsubMessages();
+            unsubLocations();
+        };
+    }, [db]);
+
+    const combinedData = useMemo(() => {
+        const data = [...allTickets, ...allMessages];
+        return data.filter(item => {
+            const matchesLocation = !locationFilter || (item.userLocation || item.Location?.Name) === locationFilter;
+            const matchesText = !filter || Object.values(item).some(val => String(val).toLowerCase().includes(filter.toLowerCase()));
+            return matchesLocation && matchesText;
+        }).sort((a, b) => {
+            if (!sortConfig.key) return 0;
+            const valA = a[sortConfig.key] || '';
+            const valB = b[sortConfig.key] || '';
+            if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
+            if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
+            return 0;
+        });
+    }, [allTickets, allMessages, filter, locationFilter, sortConfig]);
+
+    const handleSort = (key) => {
+        const direction = (sortConfig.key === key && sortConfig.direction === 'ascending') ? 'descending' : 'ascending';
+        setSortConfig({ key, direction });
+    };
+
+    const SortableHeader = ({ field, label }) => (
+        <th className="p-3 cursor-pointer" onClick={() => handleSort(field)}>
+            <div className="flex items-center gap-1">{label} {sortConfig.key === field && (sortConfig.direction === 'ascending' ? <ChevronUpIcon /> : <ChevronDownIcon />)}</div>
+        </th>
+    );
+
+    return (
+        <div>
+            <h3 className="text-2xl font-semibold mb-4">All District Activity</h3>
+            <div className="flex gap-4 mb-4">
+                <input type="text" placeholder="Filter all activity..." value={filter} onChange={e => setFilter(e.target.value)} className="w-full bg-gray-700 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-400" />
+                <select value={locationFilter} onChange={e => setLocationFilter(e.target.value)} className="bg-gray-700 p-2 rounded-md">
+                    <option value="">All Locations</option>
+                    {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                </select>
+            </div>
+            <div className="bg-gray-900/50 rounded-lg overflow-x-auto">
+                <table className="w-full text-left">
+                    <thead className="bg-gray-700/50">
+                        <tr>
+                            <SortableHeader field="createdAt" label="Date" />
+                            <SortableHeader field="type" label="Type" />
+                            <SortableHeader field="userName" label="User" />
+                            <SortableHeader field="userLocation" label="Location" />
+                            <th className="p-3">Details</th>
+                            <SortableHeader field="status" label="Status" />
+                            <th className="p-3">Recording</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading ? (
+                            <tr><td colSpan="7" className="text-center p-4"><LoadingSpinner /></td></tr>
+                        ) : combinedData.map(item => (
+                            <tr key={item.id} className="border-b border-gray-700 hover:bg-gray-800/50">
+                                <td className="p-3">{new Date(item.createdAt).toLocaleString()}</td>
+                                <td className="p-3">
+                                    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${item.type === 'Ticket' ? 'bg-blue-800 text-blue-200' : 'bg-green-800 text-green-200'}`}>
+                                        {item.type}
+                                    </span>
+                                </td>
+                                <td className="p-3">{item.userName || item.requestorName}</td>
+                                <td className="p-3">{item.userLocation || item.Location?.Name}</td>
+                                <td className="p-3 truncate max-w-md">{item.summary || item.problemDescription}</td>
+                                <td className="p-3">
+                                    {item.type === 'Ticket' && (
+                                        <span className={`font-semibold ${item.status === 'Open' ? 'text-yellow-400' : 'text-green-400'}`}>
+                                            {item.status}
+                                        </span>
+                                    )}
+                                </td>
+                                <td className="p-3">
+                                    <a href={item.videoLink || '#'} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">Link</a>
+                                </td>
+                            </tr>
+                        ))}
+                         {combinedData.length === 0 && !loading && (
+                            <tr><td colSpan="7" className="text-center p-4">No activity found.</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
+
+const UserManagementPanel = ({ db, auth }) => {
+    const [users, setUsers] = useState([]);
+    const [newUserEmail, setNewUserEmail] = useState('');
+    const [newUserName, setNewUserName] = useState('');
+    const [newUserRole, setNewUserRole] = useState('technician');
+    const [statusMessage, setStatusMessage] = useState('');
+
+    useEffect(() => {
+        if (!db) return;
+        const unsubscribe = onSnapshot(collection(db, "users"), (snapshot) => {
+            setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        });
+        return () => unsubscribe();
+    }, [db]);
+
+    const handleAddUser = async (e) => {
+        e.preventDefault();
+        if (!newUserEmail || !newUserName) {
+            setStatusMessage("Please provide both an email and a name.");
+            return;
+        }
+        setStatusMessage("Authorizing user...");
+
+        try {
+            const idToken = await auth.currentUser.getIdToken();
+            const response = await fetch(`${FIREBASE_FUNCTIONS_URL}/api/preauthorizeUser`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify({
+                    email: newUserEmail,
+                    name: newUserName,
+                    role: newUserRole
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                setStatusMessage(`Success! User ${newUserName} has been authorized.`);
+                setNewUserEmail('');
+                setNewUserName('');
+            } else {
+                throw new Error(result.error || "An unknown error occurred.");
+            }
+        } catch (error) {
+            setStatusMessage(`Error: ${error.message}`);
+            console.error("Error pre-authorizing user:", error);
+        }
+    };
+
+    const handleDeleteUser = async (userId) => {
+        if (window.confirm("Are you sure? This will remove the user's role, and they will lose access.")) {
+            await updateDoc(doc(db, "users", userId), { role: 'guest' });
+        }
+    };
+    return (
+        <div className="bg-gray-900/50 p-6 rounded-lg max-w-3xl mx-auto">
+            <h4 className="text-xl font-bold mb-4">Manage Users</h4>
+            <form onSubmit={handleAddUser} className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <input type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} placeholder="User's @normanps.org Email" className="bg-gray-700 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-400" />
+                <input type="text" value={newUserName} onChange={(e) => setNewUserName(e.target.value)} placeholder="User's Full Name" className="bg-gray-700 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-400" />
+                <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)} className="bg-gray-700 p-2 rounded-md">
+                    <option value="technician">Technician</option>
+                    <option value="leadership">Leadership</option>
+                </select>
+                <button type="submit" className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-md font-semibold">Pre-Authorize User</button>
+            </form>
+            {statusMessage && <p className="text-center mb-4 text-yellow-300">{statusMessage}</p>}
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+                {users.filter(u => u.role !== 'guest').map(user => (
+                    <div key={user.id} className="flex justify-between items-center bg-gray-800/50 p-2 rounded-md">
+                        <div>
+                            <p className="font-semibold">{user.name || user.email}</p>
+                            <p className="text-sm text-cyan-300 capitalize">{user.role}</p>
+                        </div>
+                        <button onClick={() => handleDeleteUser(user.id)}><TrashIcon /></button>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const LocationManagementPanel = ({ db }) => {
+    const [locations, setLocations] = useState([]);
+    const [techs, setTechs] = useState([]);
+    useEffect(() => {
+        if (!db) return;
+        const unsubLocations = onSnapshot(collection(db, "locations"), (snapshot) => {
+            const locs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            locs.sort((a, b) => a.name.localeCompare(b.name));
+            setLocations(locs);
+        });
+        const unsubTechs = onSnapshot(query(collection(db, "users"), where("role", "==", "technician")), (snapshot) => {
+            setTechs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        });
+        return () => {
+            unsubLocations();
+            unsubTechs();
+        };
+    }, [db]);
+
+    const handleAssignmentChange = async (locationId, techEmail, isChecked) => {
+        const locationRef = doc(db, "locations", locationId);
+        try {
+            if (isChecked) {
+                await updateDoc(locationRef, {
+                    assignedTechEmails: arrayUnion(techEmail)
+                });
+            } else {
+                await updateDoc(locationRef, {
+                    assignedTechEmails: arrayRemove(techEmail)
+                });
+            }
+        } catch (error) {
+            console.error("Error updating location assignments: ", error);
+        }
+    };
+
+    return (
+        <div className="bg-gray-900/50 p-6 rounded-lg max-w-3xl mx-auto">
+            <h4 className="text-xl font-bold mb-4">Manage Tech Assignments</h4>
+            <div className="space-y-4">
+                {locations.map(loc => (
+                    <div key={loc.id} className="bg-gray-800/50 p-4 rounded-md">
+                        <p className="font-semibold mb-3 text-lg text-cyan-300">{loc.name}</p>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            {techs.map(tech => (
+                                <label key={tech.id} className="flex items-center gap-2 p-2 rounded-md hover:bg-gray-700/50 transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        className="form-checkbox bg-gray-700 border-gray-600 text-cyan-500 h-5 w-5 rounded focus:ring-cyan-500 focus:ring-offset-gray-800"
+                                        checked={loc.assignedTechEmails?.includes(tech.email) || false}
+                                        onChange={(e) => handleAssignmentChange(loc.id, tech.email, e.target.checked)}
+                                    />
+                                    <span>{tech.name || tech.email}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+// --- End of App.js Code Base --
