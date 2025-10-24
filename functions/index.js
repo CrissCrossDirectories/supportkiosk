@@ -15,6 +15,7 @@ const cors = require("cors");
 const { google } = require("googleapis");
 const { Readable } = require("stream");
 const nodemailer = require('nodemailer');
+const { SpeechClient } = require("@google-cloud/speech").v1;
 
 // Initialize Firebase Admin SDK
 admin.initializeApp();
@@ -290,6 +291,49 @@ app.post("/syncWaiverFromSheet", async (request, response) => {
     } catch (error) {
         console.error("Error syncing waiver to Firestore:", error);
         return response.status(500).send({ error: "Internal Server Error" });
+    }
+});
+
+// NEW: Google Cloud Speech-to-Text endpoint for fallback transcription (iPad Safari, etc.)
+app.post("/transcribeAudio", async (request, response) => {
+    if (!request.body || !request.body.audioData) {
+        return response.status(400).send({ error: "Missing audioData in request body." });
+    }
+
+    try {
+        const { audioData, encoding = "MP4", sampleRateHertz = 16000, languageCode = "en-US" } = request.body;
+        
+        // Decode base64 audio data
+        const audioBuffer = Buffer.from(audioData, 'base64');
+
+        // Initialize Cloud Speech-to-Text client
+        // The client will automatically use Application Default Credentials from Firebase Admin SDK
+        const client = new SpeechClient();
+
+        // Prepare the audio request
+        const request_obj = {
+            audio: {
+                content: audioBuffer,
+            },
+            config: {
+                encoding: encoding,
+                sampleRateHertz: sampleRateHertz,
+                languageCode: languageCode,
+            },
+        };
+
+        // Call Google Cloud Speech-to-Text
+        console.log("Calling Google Cloud Speech-to-Text API...");
+        const [response_obj] = await client.recognize(request_obj);
+        const transcription = response_obj.results
+            .map(result => result.alternatives[0].transcript)
+            .join('\n');
+
+        console.log(`Transcription successful: ${transcription.substring(0, 100)}...`);
+        return response.status(200).send({ transcript: transcription });
+    } catch (error) {
+        console.error("Error in transcribeAudio:", error);
+        return response.status(500).send({ error: "Failed to transcribe audio. " + error.message });
     }
 });
 

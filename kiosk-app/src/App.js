@@ -33,6 +33,12 @@ const CloseIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w
 const CheckCircleIcon = ({ className }) => (<svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clipRule="evenodd" /></svg>);
 const MicIcon = ({ className }) => (<svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4V4c0-2.21-1.79-4-4-4S8 1.79 8 4v4c0 2.21 1.79 4 4 4zm-2-4c0-1.1.9-2 2-2s2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2V8zm10 4h-2c0 3.31-2.69 6-6 6s-6-2.69-6-6H4c0 4.42 3.58 8 8 8v3h2v-3c4.42 0 8-3.58 8-8z"/></svg>);
 
+// --- iOS Detection Utility ---
+const isIOS = () => {
+    const userAgent = navigator.userAgent.toLowerCase();
+    return /iphone|ipad|ipod/.test(userAgent) && !window.MSStream;
+};
+
 // --- Main App Component ---
 export default function App() {
     const [view, setView] = useState('kiosk');
@@ -338,6 +344,7 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
     const [errorMessage, setErrorMessage] = useState('');
 
     const recognitionRef = useRef(null);
+    const fallbackRecordingRef = useRef(false);
     const finalTranscriptRef = useRef('');
     const silenceTimeoutRef = useRef(null);
     const mediaRecorderRef = useRef(null);
@@ -482,17 +489,39 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
         }
     };
     
-    const handleListenStart = (event) => {
+    const handleListenStart = async (event) => {
         event.preventDefault(); 
         finalTranscriptRef.current = '';
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
 
+        // If a paused media recorder exists, resume it for fallback audio capture
         if (mediaRecorderRef.current?.state === 'paused') {
-            mediaRecorderRef.current.resume();
+            try { mediaRecorderRef.current.resume(); } catch (e) { console.debug('Resume failed', e); }
         }
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
+            // Fallback: if SpeechRecognition not available, start MediaRecorder capture
+            if (mediaRecorderRef.current) {
+                try {
+                    recordedChunksRef.current = [];
+                    // If inactive, start; if paused, resume
+                    if (mediaRecorderRef.current.state === 'inactive') mediaRecorderRef.current.start();
+                    else if (mediaRecorderRef.current.state === 'paused') mediaRecorderRef.current.resume();
+                    fallbackRecordingRef.current = true;
+                    setIsListening(true);
+                    
+                    // Show iOS-specific message if on iPad/iOS
+                    if (isIOS()) {
+                        setInterimTranscript('🎤 Recording... Please speak clearly. We\'ll transcribe your audio on our server.');
+                    } else {
+                        setInterimTranscript('🎤 Recording audio...');
+                    }
+                    return;
+                } catch (err) {
+                    console.error('Fallback recording start failed:', err);
+                }
+            }
             alert("Speech recognition not supported on this browser.");
             return;
         }
@@ -521,8 +550,85 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
         recognitionRef.current = recognition; 
     };
 
-    const handleListenStop = (event) => {
+    const handleListenStop = async (event) => {
         event.preventDefault(); 
+
+        // If we were fallback recording (no SpeechRecognition), stop and transcribe via Cloud Speech-to-Text
+        if (fallbackRecordingRef.current) {
+            try {
+                // Stop media recorder
+                if (mediaRecorderRef.current?.state === 'recording') {
+                    mediaRecorderRef.current.stop();
+                }
+                
+                // Create audio blob from recorded chunks
+                const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+                recordedChunksRef.current = [];
+                fallbackRecordingRef.current = false;
+                
+                // Show loading state while transcribing
+                setInterimTranscript('Transcribing audio...');
+                
+                // Convert audio blob to base64 and send to Cloud Function for transcription
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                    try {
+                        const base64Audio = reader.result.split(',')[1]; // Remove data URL prefix
+                        
+                        // Get auth token for the request
+                        const idToken = await auth.currentUser.getIdToken();
+                        
+                        // Call the transcribeAudio Cloud Function endpoint
+                        const transcribeResponse = await fetch(`${FIREBASE_FUNCTIONS_URL}/transcribeAudio`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${idToken}`,
+                            },
+                            body: JSON.stringify({
+                                audioData: base64Audio,
+                                encoding: 'MP4',
+                                sampleRateHertz: 16000,
+                                languageCode: 'en-US',
+                            }),
+                        });
+                        
+                        if (!transcribeResponse.ok) {
+                            throw new Error(`Transcription API error: ${transcribeResponse.status}`);
+                        }
+                        
+                        const transcribeData = await transcribeResponse.json();
+                        const transcript = transcribeData.transcript || '(Audio captured but transcription failed)';
+                        
+                        setIsListening(false);
+                        setInterimTranscript('');
+                        
+                        // Process the transcript (e.g., summarize waiver reason)
+                        summarizeWaiverReason(transcript);
+                    } catch (transcribeErr) {
+                        console.error('Transcription error:', transcribeErr);
+                        setIsListening(false);
+                        setInterimTranscript('');
+                        
+                        // Fall back to just uploading the audio with a generic message
+                        try {
+                            await uploadToGoogleDrive(audioBlob);
+                            summarizeWaiverReason('(Audio recorded - transcription service unavailable)');
+                        } catch (uploadErr) {
+                            console.error('Audio upload error:', uploadErr);
+                            summarizeWaiverReason('(Audio capture failed)');
+                        }
+                    }
+                };
+                reader.readAsDataURL(audioBlob);
+            } catch (err) {
+                console.error('Fallback stop failed:', err);
+                setIsListening(false);
+                setInterimTranscript('');
+                summarizeWaiverReason('(Audio capture interrupted)');
+            }
+            return;
+        }
 
         if (mediaRecorderRef.current?.state === 'recording') {
             mediaRecorderRef.current.pause();
@@ -936,6 +1042,7 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
     const pendingErrorRef = useRef(null);  // Store error to be set in effect
     
     const recognitionRef = useRef(null);
+    const fallbackRecordingRef = useRef(false);
     const finalTranscriptRef = useRef('');
     const silenceTimeoutRef = useRef(null);
     const statusRef = useRef(status);
@@ -1161,13 +1268,29 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
         finalTranscriptRef.current = '';
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
 
+        // If a paused media recorder exists, resume it as a fallback capture
+        if (mediaRecorderRef.current?.state === 'paused') {
+            try { mediaRecorderRef.current.resume(); } catch (e) { console.debug('Resume failed', e); }
+        }
+
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
+            // Fallback: start media recording so audio is captured for later review
+            if (mediaRecorderRef.current) {
+                try {
+                    recordedChunksRef.current = [];
+                    if (mediaRecorderRef.current.state === 'inactive') mediaRecorderRef.current.start();
+                    else if (mediaRecorderRef.current.state === 'paused') mediaRecorderRef.current.resume();
+                    fallbackRecordingRef.current = true;
+                    setIsListening(true);
+                    return;
+                } catch (err) {
+                    console.error('Fallback recording start failed:', err);
+                }
+            }
             alert("Speech recognition not supported on this browser.");
             setIsListening(false);
-            if (statusRef.current === 'awaiting_scan') {
-                startScanner();
-            }
+            if (statusRef.current === 'awaiting_scan') startScanner();
             return;
         }
         
@@ -1177,16 +1300,13 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
         recognition.lang = 'en-US';
 
         recognition.onstart = () => {
-            // Set listening state when recognition actually starts
             if(!isListening) setIsListening(true);
         };
         recognition.onend = () => setIsListening(false);
         recognition.onerror = (event) => {
             console.error("Speech error:", event.error);
-            setIsListening(false); // Make sure to turn off listening state on error
-            if (statusRef.current === 'awaiting_scan') {
-                startScanner();
-            }
+            setIsListening(false);
+            if (statusRef.current === 'awaiting_scan') startScanner();
         };
         
         recognition.onresult = (event) => {
@@ -1204,8 +1324,25 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
         recognitionRef.current = recognition;
     };
 
-    const handleListenStop = React.useCallback((event) => {
+    const handleListenStop = React.useCallback(async (event) => {
         event.preventDefault();
+
+        if (fallbackRecordingRef.current) {
+            try {
+                const audioLink = await stopRecording();
+                fallbackRecordingRef.current = false;
+                setIsListening(false);
+                // Provide an audio-only fallback: processTranscript cannot transcribe, so notify user via interim text
+                setInterimTranscript('(Audio captured - transcription not supported on this browser)');
+                // If we were awaiting scan, restart scanner
+                if (statusRef.current === 'awaiting_scan') startScanner();
+            } catch (err) {
+                console.error('Fallback stop failed:', err);
+                setIsListening(false);
+            }
+            return;
+        }
+
         if (recognitionRef.current) {
             recognitionRef.current.stop();
         }
@@ -1449,6 +1586,7 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
     const mediaRecorderRef = useRef(null);
     const recordedChunksRef = useRef([]);
     const recognitionRef = useRef(null);
+    const fallbackRecordingRef = useRef(false);
     const finalTranscriptRef = useRef('');
     const silenceTimeoutRef = useRef(null);
     const resetSessionTimeoutRef = useRef(null);
@@ -1768,12 +1906,26 @@ RESPONSE MUST BE VALID JSON ONLY.`;
         finalTranscriptRef.current = '';
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
 
+        // Resume any paused mediaRecorder for fallback capture
         if (mediaRecorderRef.current?.state === 'paused') {
-            mediaRecorderRef.current.resume();
+            try { mediaRecorderRef.current.resume(); } catch (e) { console.debug('Resume failed', e); }
         }
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
+            // Fallback to media recording when SpeechRecognition is not available (iPad Safari)
+            if (mediaRecorderRef.current) {
+                try {
+                    recordedChunksRef.current = [];
+                    if (mediaRecorderRef.current.state === 'inactive') mediaRecorderRef.current.start();
+                    else if (mediaRecorderRef.current.state === 'paused') mediaRecorderRef.current.resume();
+                    fallbackRecordingRef.current = true;
+                    setIsListening(true);
+                    return;
+                } catch (err) {
+                    console.error('Fallback recording start failed:', err);
+                }
+            }
             alert("Speech recognition not supported on this browser.");
             return;
         }
@@ -1802,8 +1954,22 @@ RESPONSE MUST BE VALID JSON ONLY.`;
         recognitionRef.current = recognition;
     };
 
-    const handleListenStop = (event) => {
+    const handleListenStop = async (event) => {
         event.preventDefault();
+
+        if (fallbackRecordingRef.current) {
+            try {
+                const audioLink = await stopRecording();
+                fallbackRecordingRef.current = false;
+                setIsListening(false);
+                setInterimTranscript('(Audio captured - transcription not supported on this browser)');
+            } catch (err) {
+                console.error('Fallback stop failed:', err);
+                setIsListening(false);
+            }
+            return;
+        }
+
         if (mediaRecorderRef.current?.state === 'recording') {
             mediaRecorderRef.current.pause();
         }
@@ -2208,6 +2374,7 @@ const LeaveMessageFlow = ({ onExit, cameraDeviceId }) => {
     const [messageSummary, setMessageSummary] = useState('');
     
     const recognitionRef = useRef(null);
+    const fallbackRecordingRef = useRef(false);
     const finalTranscriptRef = useRef('');
     const silenceTimeoutRef = useRef(null);
     const mediaRecorderRef = useRef(null);
@@ -2272,6 +2439,19 @@ const LeaveMessageFlow = ({ onExit, cameraDeviceId }) => {
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
+            // Start fallback media recording to capture audio on browsers without SpeechRecognition
+            if (mediaRecorderRef.current) {
+                try {
+                    recordedChunksRef.current = [];
+                    if (mediaRecorderRef.current.state === 'inactive') mediaRecorderRef.current.start();
+                    else if (mediaRecorderRef.current.state === 'paused') mediaRecorderRef.current.resume();
+                    fallbackRecordingRef.current = true;
+                    setIsListening(true);
+                    return;
+                } catch (err) {
+                    console.error('Fallback recording start failed:', err);
+                }
+            }
             alert("Speech recognition not supported on this browser.");
             return;
         }
@@ -2300,8 +2480,29 @@ const LeaveMessageFlow = ({ onExit, cameraDeviceId }) => {
         recognitionRef.current = recognition;
     };
 
-    const handleListenStop = (event, processFunc) => {
+    const handleListenStop = async (event, processFunc) => {
         event.preventDefault();
+
+        if (fallbackRecordingRef.current) {
+            try {
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                    mediaRecorderRef.current.stop();
+                }
+                const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/mp4' });
+                const audioLink = await uploadToGoogleDrive(audioBlob);
+                fallbackRecordingRef.current = false;
+                setIsListening(false);
+                // Use a fallback message to indicate we have the audio; we can't transcribe locally on iPad Safari
+                setInterimTranscript('(Audio recorded - transcription not supported on this browser)');
+                // Still run the provided processFunc with a friendly note
+                processFunc('(Audio recorded - transcription not supported on this browser)');
+            } catch (err) {
+                console.error('Fallback stop failed:', err);
+                setIsListening(false);
+            }
+            return;
+        }
+
         if (recognitionRef.current) {
             recognitionRef.current.stop();
         }
