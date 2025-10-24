@@ -67,3 +67,14 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Service account keys and credentials
+*-key.json
+*credentials*.json
+google-sheets-key.json
+
+# IDE
+.vscode/
+.idea/
+
+```
