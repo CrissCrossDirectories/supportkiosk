@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, onSnapshot, getDoc, query, where, getDocs, updateDoc, writeBatch, arrayUnion, arrayRemove, addDoc } from 'firebase/firestore';
+import { getFirestore, collection, doc, onSnapshot, getDoc, query, where, getDocs, updateDoc, writeBatch, arrayUnion, arrayRemove, addDoc, orderBy, limit } from 'firebase/firestore';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 
@@ -44,28 +44,69 @@ export default function App() {
     const [db, setDb] = useState(null);
     const [auth, setAuth] = useState(null);
     const [cameraDeviceId, setCameraDeviceId] = useState(null);
+    
+    // --- Battery/Memory Optimization: Idle Activity Tracking ---
+    const lastActivityTimeRef = useRef(Date.now());
+    const activityCheckIntervalRef = useRef(null);
+    
+    useEffect(() => {
+        // Track user activity to prevent memory accumulation
+        const handleActivity = () => {
+            lastActivityTimeRef.current = Date.now();
+        };
+        
+        // Listen for touch events (iPad kiosk interaction)
+        window.addEventListener('touchstart', handleActivity, { passive: true });
+        window.addEventListener('touchmove', handleActivity, { passive: true });
+        window.addEventListener('touchend', handleActivity, { passive: true });
+        
+        // Check every 5 minutes if idle for more than 30 minutes
+        activityCheckIntervalRef.current = setInterval(() => {
+            const idleTime = Date.now() - lastActivityTimeRef.current;
+            const thirtyMinutesMs = 30 * 60 * 1000;
+            
+            if (idleTime > thirtyMinutesMs) {
+                console.log('Kiosk idle for 30+ minutes. Restarting app to free memory...');
+                window.location.reload();
+            }
+        }, 5 * 60 * 1000);  // Check every 5 minutes
+        
+        // Cleanup
+        return () => {
+            window.removeEventListener('touchstart', handleActivity);
+            window.removeEventListener('touchmove', handleActivity);
+            window.removeEventListener('touchend', handleActivity);
+            if (activityCheckIntervalRef.current) {
+                clearInterval(activityCheckIntervalRef.current);
+            }
+        };
+    }, []);
 
     useEffect(() => {
-        // Pre-load camera device ID to speed up scanner initialization
-        const getCameraPermission = async () => {
+        // Pre-load camera and audio permissions and device ID to speed up initialization
+        const getMediaPermissions = async () => {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                console.log("Requesting camera and audio permissions...");
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 const videoTracks = stream.getVideoTracks();
+                console.log("Camera permissions granted, video tracks:", videoTracks.length);
                 if (videoTracks.length > 0) {
                     // Get the device ID of the first video track
                     const deviceId = videoTracks[0].getSettings().deviceId;
+                    console.log("Camera device ID:", deviceId);
                     if (deviceId) {
                         setCameraDeviceId(deviceId);
                     }
                 }
-                // Stop the stream tracks as we only needed them for permissions and device ID
-                videoTracks.forEach(track => track.stop());
+                // Only stop video tracks, leave the audio track available for SpeechRecognition
+                stream.getVideoTracks().forEach(track => track.stop());
+                console.log("Camera permission pre-loading complete");
             } catch (err) {
-                console.error("Error pre-loading camera:", err);
-                // The user will be prompted for camera access later if it failed here.
+                console.error("Error pre-loading camera and audio:", err);
+                // The user will be prompted for camera/audio access later if it failed here.
             }
         };
-        getCameraPermission();
+        getMediaPermissions();
     }, []);
 
     useEffect(() => {
@@ -244,18 +285,36 @@ const Header = ({ user, userInfo, onSignIn, onSignOut, setView, onLogoClick }) =
 
 const KioskHome = ({ setKioskFlow }) => (
     <div className="h-full flex flex-col justify-center items-center p-8 text-center">
-        <h2 className="text-5xl font-bold mb-4">How can we help you today?</h2>
-        <p className="text-xl text-gray-300 mb-12 max-w-2xl">Please select an option below to get started.</p>
+        <div className="mb-12">
+            <h2 className="text-5xl font-bold mb-4 text-white">How can we help you today?</h2>
+            <p className="text-2xl text-gray-300">Select an option below to get started</p>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-6xl">
-            <KioskButton title="Check In For Tech Help" description="Report a problem with your device and get in the queue." onClick={() => setKioskFlow('checkin')} />
-            <KioskButton title="Leave a Message" description="Leave a video message for your site tech if they are unavailable." onClick={() => setKioskFlow('message')} />
-            <KioskButton title="Fill Out Damage Waiver" description="Complete the form to request a waiver for an accidental damage copay." onClick={() => setKioskFlow('waiver')} />
+            <KioskButton 
+                title="Check In For Tech Help" 
+                description="Report a problem with your device and get in the queue." 
+                onClick={() => setKioskFlow('checkin')}
+                icon="📋"
+            />
+            <KioskButton 
+                title="Leave a Message" 
+                description="Leave a video message for your site tech if they are unavailable." 
+                onClick={() => setKioskFlow('message')}
+                icon="💬"
+            />
+            <KioskButton 
+                title="Fill Out Damage Waiver" 
+                description="Complete the form to request a waiver for an accidental damage copay." 
+                onClick={() => setKioskFlow('waiver')}
+                icon="📄"
+            />
         </div>
     </div>
 );
 
-const KioskButton = ({ title, description, onClick }) => (
+const KioskButton = ({ title, description, onClick, icon }) => (
     <button onClick={onClick} className="bg-gray-700/50 hover:bg-cyan-600/50 border-2 border-gray-600 hover:border-cyan-400 rounded-2xl p-8 flex flex-col justify-center items-center text-center transition-all duration-300 transform hover:scale-105 no-select">
+        <div className="text-6xl mb-4">{icon}</div>
         <h3 className="text-3xl font-bold text-cyan-300 mb-3">{title}</h3>
         <p className="text-gray-300">{description}</p>
     </button>
@@ -281,6 +340,8 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
     const recognitionRef = useRef(null);
     const finalTranscriptRef = useRef('');
     const silenceTimeoutRef = useRef(null);
+    const mediaRecorderRef = useRef(null);
+    const recordedChunksRef = useRef([]);
 
     const callProxy = async (url, body) => {
         const response = await fetch(url, {
@@ -291,6 +352,55 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
         if (!response.ok) { throw new Error(`API Error: ${response.status}`); }
         const text = await response.text();
         return text ? JSON.parse(text) : {};
+    };
+
+    const blobToBase64 = (blob) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = (error) => reject(error);
+        });
+    };
+
+    const uploadToGoogleDrive = async (audioBlob) => {
+        if (!audioBlob || audioBlob.size === 0 || !iiqUser) return null;
+        const date = new Date().toISOString().split('T')[0];
+        const location = iiqUser.Location?.Name.replace(/ /g, '-') || 'Unknown-Location';
+        const schoolId = iiqUser.SchoolIdNumber || 'Unknown-ID';
+        const fileName = `${date}_Waiver_${location}_${schoolId}_AUDIO.webm`;
+        const metadata = { userName: iiqUser.Name, userId: iiqUser.UserId, schoolId: iiqUser.SchoolIdNumber, userLocation: iiqUser.Location?.Name, type: 'waiver' };
+
+        try {
+            const base64Data = await blobToBase64(audioBlob);
+            const response = await fetch(VIDEO_UPLOAD_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fileName, fileData: base64Data, metadata }),
+            });
+            if (!response.ok) throw new Error(`Upload failed with status ${response.status}`);
+            const result = await response.json();
+            return result.link;
+        } catch (error) {
+            console.error("Failed to upload audio to Google Drive:", error);
+            return `Upload failed: ${error.message}`;
+        }
+    };
+
+    const stopRecording = () => {
+        return new Promise((resolve) => {
+            if (mediaRecorderRef.current && (mediaRecorderRef.current.state === 'recording' || mediaRecorderRef.current.state === 'paused')) {
+                mediaRecorderRef.current.onstop = async () => {
+                    const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/mp4' });
+                    const audioLink = await uploadToGoogleDrive(audioBlob);
+                    recordedChunksRef.current = [];
+                    resolve(audioLink);
+                };
+                mediaRecorderRef.current.stop();
+            } else {
+                resolve(null);
+            }
+        });
     };
 
     const getUserAssets = async (UserId) => {
@@ -334,6 +444,8 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
 
         setStatus('submitting');
         try {
+            const audioLink = await stopRecording();
+
             const waiverData = {
                 ...formData,
                 assetDescription: selectedAsset?.Name || 'N/A',
@@ -342,6 +454,7 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
                 userEmail: iiqUser.Email,
                 schoolId: iiqUser.SchoolIdNumber,
                 userLocation: iiqUser.Location?.Name,
+                audioLink: audioLink || null,
             };
             await addDoc(collection(db, "waivers"), waiverData);
             setStatus('submitted');
@@ -373,6 +486,10 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
         event.preventDefault(); 
         finalTranscriptRef.current = '';
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+        if (mediaRecorderRef.current?.state === 'paused') {
+            mediaRecorderRef.current.resume();
+        }
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
@@ -406,6 +523,11 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
 
     const handleListenStop = (event) => {
         event.preventDefault(); 
+
+        if (mediaRecorderRef.current?.state === 'recording') {
+            mediaRecorderRef.current.pause();
+        }
+
         if (recognitionRef.current) {
             recognitionRef.current.stop();
         }
@@ -418,11 +540,47 @@ const DamageWaiverFlow = ({ db, onExit, cameraDeviceId }) => {
     };
 
     useEffect(() => {
+        const initializeMedia = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: false, 
+                    audio: { 
+                        noiseSuppression: true, 
+                        echoCancellation: true,
+                        autoGainControl: true  // iPad benefit: automatic gain control
+                    } 
+                });
+                mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                mediaRecorderRef.current.ondataavailable = (event) => {
+                    if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+                };
+                mediaRecorderRef.current.start();
+                mediaRecorderRef.current.pause();
+            } catch (err) {
+                console.error("Media initialization failed in DamageWaiverFlow:", err);
+                
+                let friendlyError = "Microphone initialization failed.";
+                if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+                    friendlyError = "Microphone access denied. Please enable microphone permissions in Settings > Safari > Tech Support Kiosk > Microphone.";
+                } else if (err.name === "NotFoundError") {
+                    friendlyError = "No microphone found on this device.";
+                } else if (err.name === "NotReadableError") {
+                    friendlyError = "Microphone is in use by another application.";
+                }
+                
+                setErrorMessage(friendlyError);
+            }
+        };
+        initializeMedia();
+
         return () => {
             if (resetSessionTimeoutRef) clearTimeout(resetSessionTimeoutRef);
             if (recognitionRef.current) {
                 recognitionRef.current.stop();
                 recognitionRef.current = null;
+            }
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+                mediaRecorderRef.current.stop();
             }
         };
     }, [resetSessionTimeoutRef]);
@@ -542,11 +700,14 @@ const HoldToSpeakButton = ({ isListening, onListenStart, onListenStop, interimTr
     </div>
 );
 
-const LiveStatusDisplay = ({ status, interimTranscript, visitorName, iiqUser, problemDescription, identifiedAsset, isListening, errorMessage, potentialUser, potentialUsers, clarificationQuestion, onSelectUser, onTryAgain, userAssets, onAssetSelect, onCreateTicket, onRedoProblem, onConfirmUser, onListenStart, onListenStop, ticketDetails, scannerContainerRef }) => {
+const LiveStatusDisplay = ({ status, interimTranscript, visitorName, iiqUser, problemDescription, identifiedAsset, isListening, errorMessage, potentialUser, potentialUsers, clarificationQuestion, onSelectUser, onTryAgain, userAssets, onAssetSelect, onCreateTicket, onRedoProblem, onConfirmUser, onListenStart, onListenStop, ticketDetails, scannerContainerRef, onRetryScanning, onRetrySpeaking, ticketSummary, troubleshootingTips, showTroubleshootingOption, onShowTroubleshooting }) => {
     let message = "";
     if (status === 'initializing') message = "Initializing systems...";
     if (status === 'awaiting_scan') message = "Please align your ID badge inside the box.";
+    if (status === 'listening_for_id') message = "Please speak your ID number clearly.";
     if (status === 'awaiting_name') message = "I couldn't locate you. Please hold the button and say your name.";
+    if (status === 'awaiting_name_fallback') message = "Couldn't find that ID. Please hold the button and say your name instead.";
+    if (status === 'name_lookup_failed') message = "I couldn't find that person. Let's try again—please scan your badge or say your name.";
     if (status === 'awaiting_selection') message = "I found a few people. Please tap your name to continue.";
     if (status === 'awaiting_asset_selection') message = `Hi, ${visitorName}. Which device are you having an issue with?`;
     if (status === 'awaiting_id_confirmation') message = `Thanks, ${potentialUser.Name}. Is that correct?`;
@@ -555,12 +716,15 @@ const LiveStatusDisplay = ({ status, interimTranscript, visitorName, iiqUser, pr
     if (status === 'awaiting_problem') message = `Thanks, ${visitorName}. Please hold the button and describe your issue.`;
     if (status === 'awaiting_clarification') message = clarificationQuestion || "Let me ask a quick follow-up...";
     if (status === 'awaiting_confirmation') message = `Please review the details, ${visitorName}. Is this correct?`;
+    if (status === 'ticket_preview') message = `📋 Ticket Summary`;  // NEW
+    if (status === 'troubleshooting_view') message = `🔧 Try These First`;  // NEW
     if (status === 'error') message = errorMessage || "There was a problem.";
 
-    const showListenButton = ['awaiting_scan', 'awaiting_name', 'awaiting_problem', 'awaiting_clarification'].includes(status);
+    const showListenButton = ['awaiting_scan', 'awaiting_name', 'awaiting_name_fallback', 'listening_for_id', 'awaiting_problem', 'awaiting_clarification'].includes(status);
     const showScannerBox = status === 'awaiting_scan';
     const showTicketDetails = status === 'awaiting_confirmation';
     const showUserConfirmationButtons = status === 'awaiting_id_confirmation' || status === 'awaiting_barcode_confirmation';
+    const showRetryButtons = status === 'name_lookup_failed';
 
     return (
         <div className="bg-black/60 backdrop-blur-md p-4 sm:p-6 rounded-2xl max-w-xl w-full shadow-2xl border border-gray-500 flex flex-col items-center text-center">
@@ -623,6 +787,92 @@ const LiveStatusDisplay = ({ status, interimTranscript, visitorName, iiqUser, pr
                 </div>
             )}
 
+            {showRetryButtons && (
+                <div className="flex flex-col gap-4 pt-6 w-full">
+                    <p className="text-gray-300 text-center mb-2">Would you like to try again?</p>
+                    <button 
+                        onClick={onRetryScanning}
+                        className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-lg no-select flex items-center justify-center gap-2"
+                    >
+                        <span>🔲</span> Try Scanning Badge Again
+                    </button>
+                    <button 
+                        onClick={onRetrySpeaking}
+                        className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-6 rounded-lg no-select flex items-center justify-center gap-2"
+                    >
+                        <span>🎙️</span> Try Saying Name Again
+                    </button>
+                </div>
+            )}
+
+            {status === 'ticket_preview' && ticketSummary && (
+                <div className="text-left space-y-3 w-full">
+                    <div className="bg-gray-700 p-3 rounded mb-3">
+                        <p className="text-lg font-semibold text-cyan-300">{ticketSummary.summary}</p>
+                        <p className="text-gray-200 mt-2 text-sm">{ticketSummary.details}</p>
+                    </div>
+                    
+                    {ticketSummary.relevantHistory && (
+                        <div className="bg-gray-700 p-2 rounded text-sm">
+                            <p className="text-gray-400 text-xs">📌 Related History:</p>
+                            <p className="text-gray-300">{ticketSummary.relevantHistory}</p>
+                        </div>
+                    )}
+                    
+                    {ticketSummary.techNotes && (
+                        <div className="bg-gray-700 p-2 rounded text-sm">
+                            <p className="text-gray-400 text-xs">🔧 Tech Should Check:</p>
+                            <p className="text-gray-300">{ticketSummary.techNotes}</p>
+                        </div>
+                    )}
+                    
+                    <div className="flex gap-3 pt-2">
+                        <div className="flex-1 bg-gray-700 p-2 rounded text-center text-sm">
+                            <p className="text-gray-400 text-xs">Category</p>
+                            <p className="text-cyan-300 font-semibold text-xs">{ticketSummary.suggestedCategory}</p>
+                        </div>
+                        <div className="flex-1 bg-gray-700 p-2 rounded text-center text-sm">
+                            <p className="text-gray-400 text-xs">Urgency</p>
+                            <p className={`font-semibold text-xs ${
+                                ticketSummary.suggestedUrgency === 'High' ? 'text-red-400' :
+                                ticketSummary.suggestedUrgency === 'Medium' ? 'text-yellow-400' :
+                                'text-green-400'
+                            }`}>{ticketSummary.suggestedUrgency}</p>
+                        </div>
+                    </div>
+                    
+                    <div className="space-y-2 pt-3">
+                        <button onClick={onCreateTicket} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded-lg no-select text-sm">✅ Looks Good - Create Ticket</button>
+                        
+                        {showTroubleshootingOption && troubleshootingTips.length > 0 && (
+                            <button onClick={onShowTroubleshooting} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg no-select text-sm">🔧 Show Me Troubleshooting Tips</button>
+                        )}
+                        
+                        <button onClick={onRedoProblem} className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 px-4 rounded-lg no-select text-sm">❌ Start Over</button>
+                    </div>
+                </div>
+            )}
+
+            {status === 'troubleshooting_view' && troubleshootingTips.length > 0 && (
+                <div className="text-left space-y-3 w-full">
+                    <p className="text-gray-300 text-sm mb-3">Here are some things you can try while you wait:</p>
+                    
+                    <div className="space-y-2">
+                        {troubleshootingTips.map((tip, idx) => (
+                            <div key={idx} className="bg-gray-700 p-3 rounded">
+                                <p className="font-semibold text-yellow-300 mb-1 text-sm">Step {idx + 1}:</p>
+                                <p className="text-gray-300 text-sm">{tip}</p>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    <div className="space-y-2 pt-3">
+                        <button onClick={onCreateTicket} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded-lg no-select text-sm">✅ Back to Ticket - Create It</button>
+                        <button onClick={onRedoProblem} className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 px-4 rounded-lg no-select text-sm">❌ Start Over</button>
+                    </div>
+                </div>
+            )}
+
             {showTicketDetails && ticketDetails && iiqUser && (
                 <div className="text-left space-y-3 text-xl mt-4">
                     <p><strong className="text-cyan-400">Name:</strong> {iiqUser.Name}</p>
@@ -632,6 +882,24 @@ const LiveStatusDisplay = ({ status, interimTranscript, visitorName, iiqUser, pr
                         <button onClick={onCreateTicket} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg no-select">Yes, Create Ticket</button>
                         <button onClick={onRedoProblem} className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-lg no-select">No, Let's Try Again</button>
                     </div>
+                </div>
+            )}
+
+            {status === 'error' && (
+                <div className="flex flex-col gap-4 pt-6 w-full">
+                    <p className="text-gray-300 text-center mb-2">Would you like to try a different method?</p>
+                    <button 
+                        onClick={onRetryScanning}
+                        className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-lg no-select flex items-center justify-center gap-2"
+                    >
+                        <span>🔲</span> Try Scanning Badge Again
+                    </button>
+                    <button 
+                        onClick={onRetrySpeaking}
+                        className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-6 rounded-lg no-select flex items-center justify-center gap-2"
+                    >
+                        <span>🎙️</span> Try Saying Name
+                    </button>
                 </div>
             )}
         </div>
@@ -654,7 +922,7 @@ const ConfirmationDisplay = ({ ticket }) => (
 // --- KIOSK FLOW COMPONENTS ---
 
 const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
-    const [status, setStatus] = useState('initializing');
+    const [status, setStatus] = useState('awaiting_init'); // <-- MODIFIED: Start in a new initial state
     const [isListening, setIsListening] = useState(false);
     const [interimTranscript, setInterimTranscript] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
@@ -663,16 +931,33 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
 
     const html5QrCodeRef = useRef(null);
     const scannerContainerRef = useRef(null);
+    const scannerInitializingRef = useRef(false);  // Prevent concurrent scanner initialization
+    const scannerActiveRef = useRef(false);  // Track if scanner is actively running
+    const pendingErrorRef = useRef(null);  // Store error to be set in effect
     
     const recognitionRef = useRef(null);
     const finalTranscriptRef = useRef('');
     const silenceTimeoutRef = useRef(null);
+    const statusRef = useRef(status);
+    useEffect(() => { statusRef.current = status; }, [status]);
 
-    
+    const stopScanner = async () => {
+        if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+            try {
+                await html5QrCodeRef.current.stop();
+                scannerActiveRef.current = false;  // Mark scanner as inactive
+                html5QrCodeRef.current = null; // Clear the instance to prevent lingering callbacks
+            } catch (err) {
+                console.error("Error stopping scanner:", err);
+                scannerActiveRef.current = false;  // Mark as inactive even on error
+                html5QrCodeRef.current = null; // Clear even on error to prevent issues
+            }
+        }
+    };
 
     const findUserInIncidentIQ = React.useCallback(async (searchTerm) => {
         try {
-                        const response = await fetch(`${FIREBASE_FUNCTIONS_URL}/api/findUser`, {
+            const response = await fetch(`${FIREBASE_FUNCTIONS_URL}/api/findUser`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ searchTerm })
@@ -690,6 +975,153 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
         }
     }, []);
 
+    const verifyUserByBarcode = React.useCallback(async (searchTerm) => {
+        if (html5QrCodeRef.current?.isScanning) {
+             html5QrCodeRef.current.pause();
+        }
+        setStatus('verifying');
+        const users = await findUserInIncidentIQ(searchTerm);
+        if (users && users.length > 0) {
+            setErrorMessage('');
+            if (users.length === 1) {
+                setPotentialUser(users[0]);
+                setStatus('awaiting_barcode_confirmation');
+            } else {
+                setPotentialUsers(users);
+                setStatus('awaiting_selection');
+            }
+        } else {
+            setPotentialUser(null);
+            // Enhanced error message with clear fallback instruction
+            setErrorMessage("I couldn't find that ID. No worries! Please say your name instead and I'll look you up.");
+            setStatus('awaiting_name_fallback');  // New state to show fallback UI
+            if(html5QrCodeRef.current) html5QrCodeRef.current.resume();
+        }
+    }, [findUserInIncidentIQ]);
+
+    const startScanner = React.useCallback(async (retryCount = 0) => {
+        // Prevent concurrent scanner initialization
+        if (scannerInitializingRef.current) {
+            console.debug("Scanner initialization already in progress, skipping...");
+            return;
+        }
+        
+        scannerInitializingRef.current = true;
+        console.log("startScanner called, retryCount:", retryCount);
+        
+        const scannerElement = document.getElementById("scanner-container");
+        if (!scannerElement) {
+            // Only retry up to 5 times (500ms total) to avoid console spam
+            if (retryCount < 5) {
+                console.debug("Scanner container not found. Retrying...", { attempt: retryCount + 1 });
+                scannerInitializingRef.current = false;
+                setTimeout(() => startScanner(retryCount + 1), 100);
+            } else {
+                console.error("Scanner container element not found after 5 attempts. Check DOM structure.");
+                scannerInitializingRef.current = false;
+            }
+            return;
+        }
+        console.log("Scanner container found");
+        
+        try {
+            await stopScanner();
+            console.log("Previous scanner stopped");
+
+            if (!html5QrCodeRef.current) {
+                console.log("Creating new Html5Qrcode instance");
+                html5QrCodeRef.current = new Html5Qrcode("scanner-container", { verbose: false });
+            }
+
+            const config = {
+                fps: 30,
+                qrbox: { width: 384, height: 224 },
+                aspectRatio: 1.7777778,
+                formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
+                disableFlip: false,
+                rememberLastUsedCamera: true,
+            };
+            console.log("Scanner config:", config);
+
+            // iPad optimization: Use front-facing camera (wall-mounted iPad scenario)
+            // First, try with advanced constraints for better focus
+            let cameraConstraints = {
+                facingMode: "user",  // Front-facing camera (wall mount)
+                advanced: [
+                    { focusMode: "continuous" },
+                    { focusDistance: 0.3 }  // Optimize for closer scanning
+                ]
+            };
+            console.log("Attempting advanced camera constraints:", cameraConstraints);
+
+            try {
+                console.log("Calling html5QrCode.start() with advanced constraints");
+                await html5QrCodeRef.current.start(
+                    cameraConstraints,
+                    config,
+                    (decodedText) => { 
+                        if (html5QrCodeRef.current && scannerActiveRef.current) {
+                            console.log("Barcode detected:", decodedText);
+                            // Defer verification to next microtask to avoid state transition errors
+                            Promise.resolve().then(() => verifyUserByBarcode(decodedText));
+                        }
+                    },
+                    (errorMessage) => { 
+                        if (!html5QrCodeRef.current || !scannerActiveRef.current) return; // Prevent callbacks after scanner is stopped
+                        // Suppress non-critical scanning errors to avoid spam
+                        if (!errorMessage.includes("No QR code found") && !errorMessage.includes("NotFoundException") && !errorMessage.includes("No barcode or QR code detected")) {
+                            console.warn("QR scanning error:", errorMessage);
+                        }
+                    }
+                );
+                console.log("Scanner started successfully with advanced constraints");
+                scannerActiveRef.current = true;  // Mark scanner as active
+            } catch (advancedErr) {
+                console.warn("Advanced camera constraints failed, trying simpler constraints:", advancedErr?.message || advancedErr);
+                
+                // Create a fresh instance for fallback attempt to avoid state transition issues
+                console.log("Creating fresh Html5Qrcode instance for fallback");
+                html5QrCodeRef.current = new Html5Qrcode("scanner-container", { verbose: false });
+                
+                // Fallback: Try with simpler constraints (no advanced focus settings)
+                cameraConstraints = {
+                    facingMode: "user"  // Just front-facing camera, no advanced settings
+                };
+                console.log("Attempting fallback camera constraints:", cameraConstraints);
+                
+                console.log("Calling html5QrCode.start() with fallback constraints");
+                await html5QrCodeRef.current.start(
+                    cameraConstraints,
+                    config,
+                    (decodedText) => { 
+                        if (html5QrCodeRef.current && scannerActiveRef.current) {
+                            console.log("Barcode detected:", decodedText);
+                            // Defer verification to next microtask to avoid state transition errors
+                            Promise.resolve().then(() => verifyUserByBarcode(decodedText));
+                        }
+                    },
+                    (errorMessage) => { 
+                        if (!html5QrCodeRef.current || !scannerActiveRef.current) return; // Prevent callbacks after scanner is stopped
+                        // Suppress non-critical scanning errors to avoid spam
+                        if (!errorMessage.includes("No QR code found") && !errorMessage.includes("NotFoundException") && !errorMessage.includes("No barcode or QR code detected")) {
+                            console.warn("QR scanning error:", errorMessage);
+                        }
+                    }
+                );
+                console.log("Scanner started successfully with fallback constraints");
+                scannerActiveRef.current = true;  // Mark scanner as active
+            }
+            
+            // Only reset flag if we successfully started
+            scannerInitializingRef.current = false;
+        } catch (err) {
+            // Throw the error to be handled by the effect
+            console.error("Scanner initialization failed:", err);
+            scannerInitializingRef.current = false;
+            throw err;
+        }
+    }, []);
+
     const verifyUserByName = React.useCallback(async (name) => {
         setStatus('verifying');
         const users = await findUserInIncidentIQ(name);
@@ -703,28 +1135,39 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
                 setStatus('awaiting_id_confirmation');
             }
         } else {
-            setErrorMessage(`I couldn't find anyone named "${name}". Please try spelling it out.`);
-            setStatus('awaiting_name');
+            // If name lookup fails, give user options
+            setErrorMessage(`Sorry, I couldn't find anyone named "${name}". Please check the spelling or try scanning your badge again.`);
+            setStatus('name_lookup_failed');  // New state for failed name lookup
         }
-    }, [findUserInIncidentIQ, setErrorMessage, setPotentialUsers, setStatus, setPotentialUser]);
+    }, [findUserInIncidentIQ]);
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     const processTranscript = React.useCallback(async (transcript) => {
         if (!transcript) return;
         const cancelWords = ['cancel', 'start over', 'never mind', 'delete'];
         if (cancelWords.some(word => transcript.toLowerCase().includes(word))) {
             return onExit();
         }
-        await verifyUserByName(transcript);
-    }, [onExit, verifyUserByName]);
+        if (statusRef.current === 'listening_for_id') {
+            await verifyUserByBarcode(transcript);
+        } else {
+            await verifyUserByName(transcript);
+        }
+    }, [onExit, verifyUserByBarcode, verifyUserByName]);
     
-    const handleListenStart = (event) => {
+    const handleListenStart = async (event) => {
         event.preventDefault();
+        await stopScanner();
         finalTranscriptRef.current = '';
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
             alert("Speech recognition not supported on this browser.");
+            setIsListening(false);
+            if (statusRef.current === 'awaiting_scan') {
+                startScanner();
+            }
             return;
         }
         
@@ -733,9 +1176,18 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
         recognition.interimResults = true;
         recognition.lang = 'en-US';
 
-        recognition.onstart = () => setIsListening(true);
+        recognition.onstart = () => {
+            // Set listening state when recognition actually starts
+            if(!isListening) setIsListening(true);
+        };
         recognition.onend = () => setIsListening(false);
-        recognition.onerror = (event) => console.error("Speech error:", event.error);
+        recognition.onerror = (event) => {
+            console.error("Speech error:", event.error);
+            setIsListening(false); // Make sure to turn off listening state on error
+            if (statusRef.current === 'awaiting_scan') {
+                startScanner();
+            }
+        };
         
         recognition.onresult = (event) => {
             let final = '';
@@ -757,36 +1209,18 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
         if (recognitionRef.current) {
             recognitionRef.current.stop();
         }
+        // onend will fire and set isListening to false
         silenceTimeoutRef.current = setTimeout(() => {
             if (finalTranscriptRef.current) {
                 processTranscript(finalTranscriptRef.current.trim());
                 finalTranscriptRef.current = '';
             }
         }, 2500);
-    }, [processTranscript]);
-    
-    const verifyUserByBarcode = React.useCallback(async (searchTerm) => {
-        if (html5QrCodeRef.current?.isScanning) {
-             html5QrCodeRef.current.pause();
+        // ONLY restart scanner if we were in scanning mode, NOT in name voice mode
+        if (statusRef.current === 'awaiting_scan') {
+            startScanner();
         }
-        setStatus('verifying');
-        const users = await findUserInIncidentIQ(searchTerm);
-        if (users && users.length > 0) {
-            setErrorMessage('');
-            if (users.length === 1) {
-                setPotentialUser(users[0]);
-                setStatus('awaiting_barcode_confirmation');
-            } else {
-                setPotentialUsers(users);
-                setStatus('awaiting_selection');
-            }
-        } else {
-            setPotentialUser(null);
-            setErrorMessage("I couldn't verify that ID. Please try saying your name.");
-            setStatus('awaiting_name');
-            if(html5QrCodeRef.current) html5QrCodeRef.current.resume();
-        }
-    }, [findUserInIncidentIQ, setErrorMessage, setPotentialUser, setStatus, setPotentialUsers]);
+    }, [processTranscript, startScanner]);
     
     const handleConfirmation = React.useCallback((isConfirmed) => {
         if (isConfirmed) {
@@ -799,81 +1233,165 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
         }
     }, [onUserVerified, potentialUser]);
     
-    // This effect transitions the component to the scanning state after the initial render.
+    // Comprehensive cleanup on component unmount to prevent memory leaks
     useEffect(() => {
-        // Set status to awaiting_scan to ensure the scanner container div is rendered.
-        setStatus('awaiting_scan');
+        return () => {
+            // Stop and cleanup scanner
+            stopScanner();
+            
+            // Stop speech recognition
+            if (recognitionRef.current) {
+                try {
+                    recognitionRef.current.abort();
+                } catch (e) {
+                    console.debug("Error aborting recognition:", e);
+                }
+                recognitionRef.current = null;
+            }
+            
+            // Clear all timeouts
+            if (silenceTimeoutRef.current) {
+                clearTimeout(silenceTimeoutRef.current);
+                silenceTimeoutRef.current = null;
+            }
+            
+            // Clear all refs to allow garbage collection
+            html5QrCodeRef.current = null;
+            scannerContainerRef.current = null;
+            finalTranscriptRef.current = '';
+            
+            console.log("UserVerification component cleanup complete");
+        };
     }, []);
 
-    // This effect manages the scanner lifecycle, starting it only when the UI is ready.
+    // Effect to handle pending errors (set in event handlers to avoid state transition issues)
     useEffect(() => {
-        const startScanner = async () => {
-            // We must have the container element ready in the DOM to initialize the scanner.
-            if (!scannerContainerRef.current) {
-                // This should not happen with this new logic, but it's a good safeguard.
-                console.error("Scanner container ref is not available even when status is 'awaiting_scan'.");
-                setErrorMessage("Could not initialize scanner component.");
-                setStatus('error');
-                return;
-            }
+        if (pendingErrorRef.current) {
+            const { message, status } = pendingErrorRef.current;
+            setErrorMessage(message);
+            setStatus(status);
+            pendingErrorRef.current = null;
+        }
+    }, []);
 
+    // NEW: Handler to start scanner
+    const handleScanID = async () => {
+        console.log("handleScanID called - starting scanner initialization");
+        setStatus('awaiting_scan');
+        setErrorMessage('');
+        setPotentialUser(null);
+        
+        // Start scanner on next tick to ensure DOM is ready
+        setTimeout(async () => {
+            console.log("handleScanID setTimeout fired - calling startScanner");
             try {
-                // Ensure we don't create multiple instances
-                if (!html5QrCodeRef.current) {
-                    html5QrCodeRef.current = new Html5Qrcode("scanner-container", {
-                         verbose: false
-                    });
-                }
-
-                if (html5QrCodeRef.current.isScanning) {
-                    return;
-                }
-
-                const config = {
-                    fps: 30,
-                    qrbox: { width: 384, height: 224 },
-                    aspectRatio: 1.7777778,
-                    formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
-                    disableFlip: false,
-                    rememberLastUsedCamera: true,
-                };
-
-                await html5QrCodeRef.current.start(
-                    { facingMode: "user" },
-                    config,
-                    (decodedText) => { 
-                        if (html5QrCodeRef.current) {
-                            verifyUserByBarcode(decodedText); 
-                        }
-                    },
-                    (errorMessage) => { /* Optional: handle non-critical scan errors */ }
-                );
-
+                await startScanner();
+                console.log("startScanner completed successfully");
             } catch (err) {
                 console.error("Scanner initialization failed:", err);
+                
+                let friendlyErrorMessage = "Could not access camera. Please ensure it is not in use by another application.";
+                
                 if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-                    setErrorMessage("Camera access denied. Please enable permissions in your browser settings.");
-                } else {
-                    setErrorMessage("Could not access camera. Please ensure it is not in use by another application.");
+                    friendlyErrorMessage = 
+                        "Camera access denied. Please enable camera permissions in Settings > Safari > Tech Support Kiosk > Camera.";
+                } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+                    friendlyErrorMessage = "No camera found on this device.";
+                } else if (err.name === "NotReadableError") {
+                    friendlyErrorMessage = "Camera is in use by another app. Please close other applications and try again.";
+                } else if (err.message && err.message.includes("stream")) {
+                    friendlyErrorMessage = "Could not access camera stream. Please check camera permissions and try again.";
                 }
-                setStatus('error');
+                
+                // Defer error state setting to effect to avoid state transition issues
+                console.log("Setting pending error:", friendlyErrorMessage);
+                pendingErrorRef.current = { message: friendlyErrorMessage, status: 'error' };
             }
-        };
+        }, 0);
+    };
 
-        // Only attempt to start the scanner when the component is in the correct state.
-        if (status === 'awaiting_scan') {
-            startScanner();
-        }
+    // NEW: Handler to start voice input for ID number
+    const handleSayIDNumber = (event) => {
+        event.preventDefault();
+        setStatus('listening_for_id');
+        handleListenStart(event);
+    };
 
-        return () => {
-            // Cleanup: Ensure the scanner is stopped when the component unmounts or status changes.
-            if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-                html5QrCodeRef.current.stop().catch(err => console.error("Error stopping scanner:", err));
+    // NEW: Retry handlers for failed lookups
+    const handleRetryScanning = async () => {
+        setErrorMessage('');
+        setPotentialUser(null);
+        setStatus('awaiting_scan');
+        
+        // Start scanner on next tick to ensure DOM is ready
+        setTimeout(async () => {
+            try {
+                await startScanner();
+            } catch (err) {
+                console.error("Scanner initialization failed:", err);
+                
+                let friendlyErrorMessage = "Could not access camera. Please ensure it is not in use by another application.";
+                
+                if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+                    friendlyErrorMessage = 
+                        "Camera access denied. Please enable camera permissions in Settings > Safari > Tech Support Kiosk > Camera.";
+                } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+                    friendlyErrorMessage = "No camera found on this device.";
+                } else if (err.name === "NotReadableError") {
+                    friendlyErrorMessage = "Camera is in use by another app. Please close other applications and try again.";
+                } else if (err.message && err.message.includes("stream")) {
+                    friendlyErrorMessage = "Could not access camera stream. Please check camera permissions and try again.";
+                }
+                
+                // Defer error state setting to effect to avoid state transition issues
+                pendingErrorRef.current = { message: friendlyErrorMessage, status: 'error' };
             }
-            html5QrCodeRef.current = null;
-        };
-    }, [status, verifyUserByBarcode, cameraDeviceId]);
+        }, 0);
+    };
 
+    const handleRetrySpeaking = (event) => {
+        setErrorMessage('');
+        setPotentialUser(null);
+        setStatus('awaiting_name');
+        if (event) event.preventDefault();
+        handleListenStart(event || { preventDefault: () => {} });
+    };
+
+    if (status === 'awaiting_init') {
+        return (
+            <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
+                <div className="bg-black/60 backdrop-blur-md p-8 rounded-2xl max-w-2xl w-full shadow-2xl border border-gray-500 flex flex-col items-center text-center">
+                    <h2 className="text-4xl font-semibold text-cyan-400 mb-6">Welcome to Tech Support</h2>
+                    <p className="text-xl text-gray-300 mb-12">How would you like to identify yourself?</p>
+                    
+                    <div className="flex flex-col md:flex-row gap-6 w-full">
+                        {/* Scan ID Button */}
+                        <button 
+                            onClick={handleScanID}
+                            className="flex-1 flex flex-col items-center justify-center gap-4 px-8 py-8 rounded-2xl bg-blue-600/80 hover:bg-blue-500/90 text-white font-bold text-2xl transition-all duration-300 transform hover:scale-105 no-select"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            <span>Scan ID Badge</span>
+                            <p className="text-sm text-blue-100">Hold badge up to camera</p>
+                        </button>
+
+                        {/* Say ID Number Button */}
+                        <button 
+                            onMouseDown={handleSayIDNumber}
+                            onTouchStart={handleSayIDNumber}
+                            className="flex-1 flex flex-col items-center justify-center gap-4 px-8 py-8 rounded-2xl bg-purple-600/80 hover:bg-purple-500/90 text-white font-bold text-2xl transition-all duration-300 transform hover:scale-105 no-select"
+                        >
+                            <MicIcon className="w-16 h-16 text-white" />
+                            <span>Say ID Number</span>
+                            <p className="text-sm text-purple-100">Hold to speak</p>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
@@ -895,12 +1413,13 @@ const UserVerification = ({ onUserVerified, onExit, cameraDeviceId }) => {
                 onConfirmUser={handleConfirmation}
                 onListenStart={handleListenStart}
                 onListenStop={handleListenStop}
+                onRetryScanning={handleRetryScanning}
+                onRetrySpeaking={handleRetrySpeaking}
                 scannerContainerRef={scannerContainerRef}
             />
         </div>
     );
 };
-
 
 const CheckInFlow = ({ onExit, cameraDeviceId }) => {
     const [status, setStatus] = useState('verifying_user');
@@ -913,11 +1432,19 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
     const [userAssets, setUserAssets] = useState([]);
     const [identifiedAsset, setIdentifiedAsset] = useState(null);
     const [conversationHistory, setConversationHistory] = useState([]);
-    const [clarificationCount, setClarificationCount] = useState(0);
+    // eslint-disable-next-line no-unused-vars
+    const [clarificationCount, setClarificationCount] = useState(0);  // Kept for reference, now managed by generateTicketSummary
     const [clarificationQuestion, setClarificationQuestion] = useState('');
     const [isListening, setIsListening] = useState(false);
     const [interimTranscript, setInterimTranscript] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
+    
+    // NEW: Fast-path optimization states
+    const [assetHistory, setAssetHistory] = useState(null);
+    const [userHistory, setUserHistory] = useState(null);
+    const [showTroubleshootingOption, setShowTroubleshootingOption] = useState(false);
+    const [troubleshootingTips, setTroubleshootingTips] = useState([]);
+    const [ticketSummary, setTicketSummary] = useState(null);
     
     const mediaRecorderRef = useRef(null);
     const recordedChunksRef = useRef([]);
@@ -986,6 +1513,218 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
         onExit();
     };
 
+    // NEW: Helper function to format dates for display
+    const formatDate = (dateString) => {
+        if (!dateString) return 'Unknown';
+        try {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 0) return 'Today';
+            if (diffDays === 1) return 'Yesterday';
+            if (diffDays < 7) return `${diffDays} days ago`;
+            if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+            if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
+            return `${Math.floor(diffDays / 365)} years ago`;
+        } catch (error) {
+            return 'Unknown';
+        }
+    };
+
+    // NEW: Load user and device history asynchronously (doesn't block UI)
+    const getUserHistoryContext = async (userId, assetId) => {
+        try {
+            const db = getFirestore();
+            
+            // Query prior 5 user tickets
+            const userTicketsSnap = await getDocs(query(
+                collection(db, "tickets"),
+                where("userId", "==", userId),
+                orderBy("createdAt", "desc"),
+                limit(5)
+            ));
+            
+            // Query prior 10 asset tickets
+            const assetTicketsSnap = await getDocs(query(
+                collection(db, "tickets"),
+                where("assetTag", "==", assetId),
+                orderBy("createdAt", "desc"),
+                limit(10)
+            ));
+            
+            const userTickets = userTicketsSnap.docs.map(d => d.data());
+            const assetTickets = assetTicketsSnap.docs.map(d => d.data());
+            
+            // Extract common patterns from both histories
+            const allTickets = [...userTickets, ...assetTickets];
+            const patterns = {};
+            allTickets.forEach(ticket => {
+                const problem = (ticket.problemDescription || '').toLowerCase();
+                if (problem.includes('screen')) patterns.screen = (patterns.screen || 0) + 1;
+                if (problem.includes('battery')) patterns.battery = (patterns.battery || 0) + 1;
+                if (problem.includes('charge')) patterns.charge = (patterns.charge || 0) + 1;
+                if (problem.includes('keyboard')) patterns.keyboard = (patterns.keyboard || 0) + 1;
+                if (problem.includes('wifi') || problem.includes('wifi')) patterns.connectivity = (patterns.connectivity || 0) + 1;
+                if (problem.includes('freeze') || problem.includes('slow')) patterns.performance = (patterns.performance || 0) + 1;
+                if (problem.includes('crack') || problem.includes('damage')) patterns.physical = (patterns.physical || 0) + 1;
+            });
+            
+            const sortedPatterns = Object.entries(patterns)
+                .sort(([,a], [,b]) => b - a)
+                .slice(0, 3)
+                .map(([k]) => k);
+            
+            return {
+                userTicketHistory: userTickets,
+                assetTicketHistory: assetTickets,
+                commonPatterns: sortedPatterns,
+            };
+        } catch (error) {
+            console.error("History fetch failed:", error);
+            return null;  // Don't block flow if history unavailable
+        }
+    };
+
+    // NEW: Decide if we need to ask a clarification question
+    const shouldAskClarificationQuestion = (problemText, assetHistory) => {
+        // If this is a repeated pattern and history shows it, skip question
+        if (assetHistory?.commonPatterns?.length > 0) {
+            const patterns = assetHistory.commonPatterns.join('|');
+            const patternRegex = new RegExp(patterns, 'i');
+            if (patternRegex.test(problemText)) {
+                // This is a known pattern - we likely have enough context
+                return false;
+            }
+        }
+        
+        // If problem statement is specific and clear, skip question
+        const specificKeywords = ['cracked', 'broken', 'won\'t', 'can\'t', 'not', 'won t', 'cant'];
+        const hasSpecificKeyword = specificKeywords.some(kw => problemText.toLowerCase().includes(kw));
+        const isLongEnough = problemText.length > 30;
+        
+        if (hasSpecificKeyword && isLongEnough) {
+            return false;  // Specific enough, skip question
+        }
+        
+        // Otherwise, ask ONE clarifying question
+        return true;
+    };
+
+    // NEW: Get ONE smart clarification question with context
+    const getSmartClarificationQuestion = async (history, asset, assetHistory, userName) => {
+        // eslint-disable-next-line no-unused-vars
+        const deviceType = asset?.Name?.split(' ')?.[0] || 'device';
+        
+        // Build brief history context string
+        const historyContext = assetHistory?.assetTicketHistory?.length > 0 
+            ? `
+    RELEVANT DEVICE HISTORY:
+    ${assetHistory.assetTicketHistory.slice(0, 2).map(t => 
+        `- ${t.problemDescription || 'Issue'} (${formatDate(t.createdAt)})`
+    ).join('\n')}
+    
+    COMMON ISSUES FOR THIS DEVICE: ${assetHistory.commonPatterns.join(', ')}
+  `
+            : '';
+        
+        const prompt = `You are an IT support technician. Ask ONE brief, smart clarification question.
+    
+STUDENT: ${userName}
+DEVICE: ${asset?.Name} (${asset?.Model?.Name})
+PROBLEM: "${history[0].parts[0].text}"
+${historyContext}
+
+TASK: Ask ONE quick question to get critical missing details. Keep it to 10-15 seconds to answer.
+- Reference history if relevant: "I see you had ${assetHistory?.commonPatterns?.[0]} issues before..."
+- Be device-specific (e.g., iPad: "Is the screen responding?" vs MacBook: "Can you hear the fan?")
+- Do NOT ask what they already said
+
+RESPONSE MUST BE VALID JSON:
+{"status": "asking", "content": "Your ONE question here."}`;
+        
+        const payload = {
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+        };
+        
+        try {
+            const result = await callProxy(GEMINI_PROXY_URL, { body: payload });
+            const jsonText = result.candidates[0].content.parts[0].text;
+            return JSON.parse(jsonText);
+        } catch (error) {
+            console.error("Clarification question generation failed:", error);
+            return { status: 'asking', content: 'Can you tell me a bit more about what\'s happening?' };
+        }
+    };
+
+    // NEW: Generate comprehensive ticket summary with all context
+    const generateTicketSummary = async (problemText, followUpAnswer, assetHistoryData, userHistoryData) => {
+        setStatus('processing');
+        
+        const conversationText = followUpAnswer 
+            ? `Initial: ${problemText}\nFollow-up Response: ${followUpAnswer}`
+            : problemText;
+        
+        const deviceHistory = assetHistoryData?.assetTicketHistory?.slice(0, 3).map(t => 
+            `- ${t.problemDescription || 'Issue'} (${formatDate(t.createdAt)})`
+        ).join('\n') || 'No prior issues';
+        
+        const userIssueHistory = userHistoryData?.userTicketHistory?.slice(0, 2).map(t => 
+            `- ${t.problemDescription || 'Issue'} on ${t.device} (${formatDate(t.createdAt)})`
+        ).join('\n') || 'First reported issue';
+        
+        const prompt = `You are an expert IT support technician creating a ticket summary for the tech staff.
+
+DEVICE: ${identifiedAsset?.Name} (${identifiedAsset?.Model?.Name})
+STUDENT: ${visitorName}
+PROBLEM DESCRIBED: ${conversationText}
+
+DEVICE HISTORY:
+${deviceHistory}
+
+STUDENT'S HISTORY:
+${userIssueHistory}
+
+CREATE A TICKET SUMMARY with these EXACT JSON fields:
+
+{
+  "summary": "One clear sentence describing the issue",
+  "details": "2-3 sentences with specific details and any relevant context",
+  "suggestedCategory": "e.g., 'Hardware > Screen', 'Software > Performance', 'Connectivity > WiFi'",
+  "suggestedUrgency": "High|Medium|Low",
+  "relevantHistory": "Any related prior tickets or patterns (or null)",
+  "techNotes": "Specific things tech should check first",
+  "troubleshootingTips": ["Tip 1", "Tip 2"] (only include if applicable, otherwise empty array)
+}
+
+RESPONSE MUST BE VALID JSON ONLY.`;
+        
+        const payload = {
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+        };
+        
+        try {
+            const result = await callProxy(GEMINI_PROXY_URL, { body: payload });
+            const jsonText = result.candidates[0].content.parts[0].text;
+            const summary = JSON.parse(jsonText);
+            
+            setTicketSummary(summary);
+            setTroubleshootingTips(summary.troubleshootingTips || []);
+            setShowTroubleshootingOption((summary.troubleshootingTips || []).length > 0);
+            
+            // Move to preview state (not directly to confirmation)
+            setStatus('ticket_preview');
+        } catch (error) {
+            console.error("Summary generation failed:", error);
+            setErrorMessage("Failed to generate ticket summary. Please try again.");
+            setStatus('error');
+            setTimeout(resetSession, 10000);
+        }
+    };
+
     const handleUserVerified = async (user) => {
         setIiqUser(user);
         const firstName = toProperCase(user.Name.split(' ')[0]);
@@ -1012,12 +1751,15 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
         if (currentStatus === 'awaiting_problem') {
             await startClarificationProcess(transcript);
         } else if (currentStatus === 'awaiting_clarification') {
-            const newCount = clarificationCount + 1;
-            setClarificationCount(newCount);
+            // User answered the clarification question
             const updatedHistory = [...conversationHistory, { role: 'user', parts: [{ text: transcript }] }];
             setConversationHistory(updatedHistory);
-            const result = await getProblemSolvingResponse(updatedHistory, identifiedAsset, newCount, visitorName);
-            handleClarificationResponse(result, updatedHistory);
+            
+            // Extract the initial problem from history
+            const initialProblem = conversationHistory[0]?.parts?.[0]?.text || '';
+            
+            // NEW: Skip directly to summary with user's answer (don't ask more questions in fast-path)
+            await generateTicketSummary(initialProblem, transcript, assetHistory, userHistory);
         }
     };
     
@@ -1025,6 +1767,10 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
         event.preventDefault();
         finalTranscriptRef.current = '';
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+        if (mediaRecorderRef.current?.state === 'paused') {
+            mediaRecorderRef.current.resume();
+        }
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
@@ -1082,8 +1828,30 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
         }
     };
 
-    const handleAssetSelection = (asset) => { setIdentifiedAsset(asset); setStatus('awaiting_problem'); };
-    const handleRedoProblem = () => { setProblemDescription(''); setTicketDetails(null); setConversationHistory([]); setClarificationCount(0); setStatus('awaiting_problem'); };
+    const handleAssetSelection = (asset) => {
+        setIdentifiedAsset(asset);
+        
+        // NEW: Start loading history in background (doesn't block UI)
+        if (iiqUser && asset?.AssetTag) {
+            getUserHistoryContext(iiqUser.UserId, asset.AssetTag)
+                .then(history => {
+                    setAssetHistory(history);
+                    setUserHistory({ userTicketHistory: [] }); // Placeholder
+                })
+                .catch(err => console.error("History load failed:", err));
+        }
+        
+        setStatus('awaiting_problem');
+    };
+    const handleRedoProblem = () => { 
+        setProblemDescription(''); 
+        setTicketDetails(null); 
+        setConversationHistory([]); 
+        setClarificationCount(0); 
+        setTicketSummary(null);  // NEW: Clear ticket summary
+        setTroubleshootingTips([]);  // NEW: Clear tips
+        setStatus('awaiting_problem'); 
+    };
 
     async function createIncidentIQTicket(ticketData) {
         try {
@@ -1140,10 +1908,26 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
         const initialHistory = [{ role: 'user', parts: [{ text: initialProblem }] }];
         setConversationHistory(initialHistory);
         setClarificationCount(0);
-        const result = await getProblemSolvingResponse(initialHistory, identifiedAsset, 0, visitorName);
-        handleClarificationResponse(result, initialHistory);
+        
+        // NEW: Fast-path logic - check if we even need a question
+        if (!shouldAskClarificationQuestion(initialProblem, assetHistory)) {
+            // Problem statement is specific enough - skip question and go straight to summary
+            await generateTicketSummary(initialProblem, null, assetHistory, userHistory);
+            return;
+        }
+        
+        // Otherwise, ask ONE smart contextual question
+        const result = await getSmartClarificationQuestion(initialHistory, identifiedAsset, assetHistory, visitorName);
+        
+        if (result.status === 'asking') {
+            setClarificationQuestion(result.content);
+            setConversationHistory([...initialHistory, { role: 'model', parts: [{ text: result.content }] }]);
+            setStatus('awaiting_clarification');
+        }
     };
 
+    // OLD: Kept for reference but no longer used in fast-path flow
+    // eslint-disable-next-line no-unused-vars
     const getProblemSolvingResponse = async (history, asset, count, userName) => {
         const assetInfo = asset ? `The user is having a problem with their ${asset.Name} (Model: ${asset.Model?.Name || 'N/A'}).` : "The user has not specified a device.";
         const prompt = `You are an expert IT support technician helping a user named ${userName}. Your goal is to gather information to create a useful support ticket. **CONTEXT:** - User: ${userName} - Device: ${assetInfo} - Conversation History:   ${history.map(h => `${h.role === 'user' ? userName : 'Assistant'}: ${h.parts[0].text}`).join('\n')} - Questions Asked So Far: ${count} **YOUR TASK (Follow these steps in order):** 1.  **Analyze Completeness:** Review the entire conversation history. Do you have a specific, actionable problem description? "It's broken" is not enough. "The screen is cracked" is enough. 2.  **Decision:** - **IF** the information is complete **OR** if you have already asked 2 questions (the "Questions Asked so far" is 2), you MUST proceed to Step 4 (Summarize).     - **ELSE** (the information is vague and you have asked fewer than 2 questions), proceed to Step 3 (Ask). 3.  **Ask:** Formulate ONE clarifying question. Do not repeat previous questions. The goal is to get a more specific detail. 4.  **Summarize:** Write a concise, one-paragraph summary of the issue based on ALL information gathered. **RESPONSE FORMAT:** You MUST respond with a valid JSON object. - If you decided to ask a question in Step 3, use this format:   {"status": "needs_clarification", "content": "Your question here."}  - If you decided to summarize in Step 4, use this format:   {"status": "complete", "content": "Your summary paragraph here.", "issuePath": "[Categorized Issue Path, e.g., Hardware > Screen Damage]"}`;
@@ -1159,11 +1943,12 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
             return JSON.parse(jsonText);
         } catch (error) {
             console.error("Clarification/Summarization AI error:", error);
-            const lastUserMessage = history.filter(h => h.role === 'user').pop()?.parts[0]?.text || "Problem description could not be processed.";
-            return { status: 'complete', content: lastUserMessage };
+            return { status: 'needs_clarification', content: "Can you tell me more about what's happening with your device?" };
         }
     }
 
+    // OLD: Kept for reference but no longer used in fast-path flow
+    // eslint-disable-next-line no-unused-vars
     const handleClarificationResponse = (result, history) => {
         if (result.status === 'needs_clarification') {
             setClarificationQuestion(result.content);
@@ -1177,6 +1962,8 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
         }
     };
     
+    // OLD: Kept for reference but no longer used in fast-path flow
+    // eslint-disable-next-line no-unused-vars
     const prepareTicket = React.useCallback(() => {
         if (!iiqUser || !problemDescription) return;
         setStatus('processing');
@@ -1205,21 +1992,36 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
         setStatus('awaiting_confirmation');
     }, [iiqUser, problemDescription, identifiedAsset, issuePath]);
 
-    useEffect(() => {
-        if (problemDescription && iiqUser && !ticketDetails) {
-            prepareTicket();
-        }
-    }, [problemDescription, iiqUser, ticketDetails, prepareTicket]);
+    // OLD: useEffect - no longer used in fast-path flow
+    // useEffect(() => {
+    //     if (problemDescription && iiqUser && !ticketDetails) {
+    //         prepareTicket();
+    //     }
+    // }, [problemDescription, iiqUser, ticketDetails, prepareTicket]);
 
     const createTicket = async () => {
-        if (!ticketDetails || !iiqUser) return;
+        if (!ticketSummary || !iiqUser) return;
         setStatus('processing');
         try {
-            const videoLink = await stopRecording(); // No ticketNumber yet
+            const videoLink = await stopRecording();
+
+            const locationName = iiqUser.Location?.Name || 'Unknown Location';
+            
+            // Use summary data to create ticket
+            let subject = '';
+            if (identifiedAsset) {
+                subject = `${identifiedAsset.Name} > ${ticketSummary.suggestedCategory || 'General'}`;
+            } else {
+                subject = `${ticketSummary.suggestedCategory || 'Support'} - ${locationName}`;
+            }
 
             const ticketDetailsWithVideo = {
-                ...ticketDetails,
-                IssueDescription: `${ticketDetails.IssueDescription}\n\nAudio Submission: ${videoLink || 'Not available.'}`
+                Subject: subject,
+                IssueDescription: `${ticketSummary.summary}\n\n${ticketSummary.details}\n\n${ticketSummary.techNotes ? `Tech Notes: ${ticketSummary.techNotes}` : ''}\n\nAudio Submission: ${videoLink || 'Not available.'}`,
+                ForId: iiqUser.UserId,
+                LocationId: iiqUser.LocationId,
+                Assets: identifiedAsset ? [{ AssetId: identifiedAsset.AssetId }] : [],
+                Tags: [{ Name: "Walk Up" }],
             };
 
             const newTicket = await createIncidentIQTicket(ticketDetailsWithVideo);
@@ -1256,7 +2058,7 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
         return new Promise((resolve) => {
             if (mediaRecorderRef.current && (mediaRecorderRef.current.state === 'recording' || mediaRecorderRef.current.state === 'paused')) {
                 mediaRecorderRef.current.onstop = async () => {
-                    const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+                    const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/mp4' });
                     const audioLink = await uploadToGoogleDrive(audioBlob, ticketNumber);
                     recordedChunksRef.current = [];
                     resolve(audioLink);
@@ -1275,7 +2077,8 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
                     video: false, 
                     audio: { 
                         noiseSuppression: true, 
-                        echoCancellation: true 
+                        echoCancellation: true,
+                        autoGainControl: true  // iPad benefit: automatic gain control
                     } 
                 };
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -1287,17 +2090,69 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
                 startRecording();
             } catch (err) {
                 console.error("Media initialization failed in CheckInFlow:", err);
-                setErrorMessage(err.message);
+                
+                let friendlyError = "Microphone initialization failed.";
+                if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+                    friendlyError = "Microphone access denied. Please enable microphone permissions in Settings > Safari > Tech Support Kiosk > Microphone.";
+                } else if (err.name === "NotFoundError") {
+                    friendlyError = "No microphone found on this device.";
+                } else if (err.name === "NotReadableError") {
+                    friendlyError = "Microphone is in use by another application.";
+                }
+                
+                setErrorMessage(friendlyError);
                 setStatus('error');
             }
         };
         initializeMedia();
         
+        // Comprehensive cleanup for CheckInFlow to prevent memory leaks
         return () => {
+            // Stop and cleanup speech recognition
             if (recognitionRef.current) {
-                recognitionRef.current.stop();
+                try {
+                    recognitionRef.current.abort();
+                } catch (e) {
+                    console.debug("Error aborting recognition:", e);
+                }
                 recognitionRef.current = null;
             }
+            
+            // Stop media recording and cleanup stream
+            if (mediaRecorderRef.current) {
+                try {
+                    if (mediaRecorderRef.current.state !== 'inactive') {
+                        mediaRecorderRef.current.stop();
+                    }
+                    // Stop all tracks in the stream
+                    mediaRecorderRef.current.stream.getTracks().forEach(track => {
+                        try {
+                            track.stop();
+                        } catch (e) {
+                            console.debug("Error stopping track:", e);
+                        }
+                    });
+                } catch (e) {
+                    console.debug("Error cleaning up media recorder:", e);
+                }
+                mediaRecorderRef.current = null;
+            }
+            
+            // Clear all timeouts
+            if (silenceTimeoutRef.current) {
+                clearTimeout(silenceTimeoutRef.current);
+                silenceTimeoutRef.current = null;
+            }
+            if (resetSessionTimeoutRef.current) {
+                clearTimeout(resetSessionTimeoutRef.current);
+                resetSessionTimeoutRef.current = null;
+            }
+            
+            // Clear all refs to allow garbage collection
+            finalTranscriptRef.current = '';
+            recordedChunksRef.current = [];
+            
+            console.log("CheckInFlow component cleanup complete");
         };
     }, []);
 
@@ -1334,6 +2189,10 @@ const CheckInFlow = ({ onExit, cameraDeviceId }) => {
                 onListenStop={handleListenStop}
                 ticketDetails={ticketDetails}
                 clarificationQuestion={clarificationQuestion}
+                ticketSummary={ticketSummary}
+                troubleshootingTips={troubleshootingTips}
+                showTroubleshootingOption={showTroubleshootingOption}
+                onShowTroubleshooting={() => setStatus('troubleshooting_view')}
             />
         </div>
     );
@@ -1405,6 +2264,12 @@ const LeaveMessageFlow = ({ onExit, cameraDeviceId }) => {
         finalTranscriptRef.current = '';
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
 
+        // Stop any existing recognition to prevent conflicts
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+            recognitionRef.current = null;
+        }
+
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
             alert("Speech recognition not supported on this browser.");
@@ -1453,7 +2318,11 @@ const LeaveMessageFlow = ({ onExit, cameraDeviceId }) => {
              try {
                 const constraints = { 
                     video: false, 
-                    audio: true 
+                    audio: {
+                        noiseSuppression: true,
+                        echoCancellation: true,
+                        autoGainControl: true  // iPad benefit: automatic gain control
+                    }
                 };
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -1462,22 +2331,71 @@ const LeaveMessageFlow = ({ onExit, cameraDeviceId }) => {
                 };
             } catch (err) {
                 console.error("Media initialization failed in LeaveMessageFlow:", err);
-                setErrorMessage(err.message);
+                
+                let friendlyError = "Microphone initialization failed.";
+                if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+                    friendlyError = "Microphone access denied. Please enable microphone permissions in Settings > Safari > Tech Support Kiosk > Microphone.";
+                } else if (err.name === "NotFoundError") {
+                    friendlyError = "No microphone found on this device.";
+                } else if (err.name === "NotReadableError") {
+                    friendlyError = "Microphone is in use by another application.";
+                }
+                
+                setErrorMessage(friendlyError);
                 setStatus('error');
             }
         };
         initialize();
+        
+        // Comprehensive cleanup for LeaveMessageFlow to prevent memory leaks
         return () => {
+            // Stop and cleanup speech recognition
             if (recognitionRef.current) {
-                recognitionRef.current.stop();
+                try {
+                    recognitionRef.current.abort();
+                } catch (e) {
+                    console.debug("Error aborting recognition:", e);
+                }
                 recognitionRef.current = null;
             }
+            
+            // Stop media recording and cleanup stream
+            if (mediaRecorderRef.current) {
+                try {
+                    if (mediaRecorderRef.current.state !== 'inactive') {
+                        mediaRecorderRef.current.stop();
+                    }
+                    // Stop all tracks in the stream
+                    mediaRecorderRef.current.stream.getTracks().forEach(track => {
+                        try {
+                            track.stop();
+                        } catch (e) {
+                            console.debug("Error stopping track:", e);
+                        }
+                    });
+                } catch (e) {
+                    console.debug("Error cleaning up media recorder:", e);
+                }
+                mediaRecorderRef.current = null;
+            }
+            
+            // Clear all timeouts
+            if (silenceTimeoutRef.current) {
+                clearTimeout(silenceTimeoutRef.current);
+                silenceTimeoutRef.current = null;
+            }
+            
+            // Clear all refs to allow garbage collection
+            finalTranscriptRef.current = '';
+            recordedChunksRef.current = [];
+            
+            console.log("LeaveMessageFlow component cleanup complete");
         };
     }, []);
     
     const handleSaveMessage = async () => {
         setStatus('saving');
-        const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+        const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/mp4' });
         const audioLink = await uploadToGoogleDrive(audioBlob);
         
         const db = getFirestore();

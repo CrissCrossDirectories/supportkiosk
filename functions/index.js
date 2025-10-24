@@ -32,7 +32,7 @@ const transporter = nodemailer.createTransport({
 
 // Create an Express app instance for API endpoints
 const app = express();
-app.use(cors({ origin: ["https://supportkiosk-b43dd.web.app", "http://localhost:3000"] }));
+app.use(cors({ origin: ["https://supportkiosk-b43dd.web.app", "http://localhost:3000", "http://localhost:3001"] }));
 app.use(express.json({ limit: "50mb" }));
 
 // --- Middleware ---
@@ -193,7 +193,7 @@ app.post("/geminiProxy", async (request, response) => {
     }
     const {body} = request.body;
     const apiKey = process.env.GEMINI_API_KEY;
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
     try {
       const apiResponse = await fetch(apiUrl, {
         method: "POST",

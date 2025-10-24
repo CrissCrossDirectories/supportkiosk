@@ -1,3 +1,49 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* iPad Kiosk Mode Optimizations */
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #1a1a1a;
+  /* Prevent pinch to zoom */
+  touch-action: manipulation;
+}
+
+body {
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-app-region: no-drag;
+}
+
+/* Prevent accidental gestures */
+* {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Allow text selection in inputs */
+input, textarea, button, select {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Hide status bar on scroll */
+body {
+  -webkit-user-select: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+/* Prevent scroll bounce */
+html {
+  overscroll-behavior: none;
+}

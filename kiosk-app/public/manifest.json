@@ -1,6 +1,7 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "Tech Kiosk",
+  "name": "Tech Support Kiosk - Norman Public Schools",
+  "description": "iPad kiosk for tech support check-in, damage waivers, and message submissions",
   "icons": [
     {
       "src": "favicon.ico",
@@ -18,8 +19,12 @@
       "sizes": "512x512"
     }
   ],
-  "start_url": ".",
-  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
   "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "background_color": "#1a1a1a",
+  "categories": ["business", "productivity"],
+  "prefer_related_applications": false
 }
